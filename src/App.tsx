@@ -25,7 +25,7 @@ import { buildTreeLines } from './lib/tree-view'
 import './App.css'
 import '@xyflow/react/dist/style.css'
 
-type AppTab = 'overview' | 'board' | 'dependencies' | 'diagnostics' | 'about'
+type AppTab = 'overview' | 'board' | 'dependencies' | 'diagnostics' | 'architecture' | 'about'
 type BusDisplayMode = 'detailed' | 'trunk-only'
 type FolderControlMode = 'preset' | 'manual'
 type ManualFolderDepth = 'any' | number
@@ -35,6 +35,119 @@ type CycleGroup = {
   id: number
   size: number
   filePaths: string[]
+}
+type ArchitectureLayerId = 'ui' | 'domain' | 'infra' | 'shared' | 'tests' | 'unknown'
+type ArchitectureConfigMode = 'visual' | 'json'
+type ArchitectureViolation = {
+  fromPath: string
+  toPath: string
+  fromLayer: ArchitectureLayerId
+  toLayer: ArchitectureLayerId
+  kind: DependencyEdge['kind']
+}
+type ArchitectureConfig = {
+  layerMatchers: Record<ArchitectureLayerId, string[]>
+  allowedTargets: Record<ArchitectureLayerId, ArchitectureLayerId[]>
+}
+
+const ARCHITECTURE_LAYER_ORDER: ArchitectureLayerId[] = ['tests', 'ui', 'domain', 'infra', 'shared']
+const ARCHITECTURE_RULE_LAYERS: ArchitectureLayerId[] = ['ui', 'domain', 'infra', 'shared', 'tests', 'unknown']
+const ARCHITECTURE_MATCHER_LAYERS: ArchitectureLayerId[] = ['tests', 'ui', 'domain', 'infra', 'shared']
+const ARCHITECTURE_STORAGE_KEY = 'schematic-code-visualizer.architecture-config.v1'
+const DEFAULT_ARCHITECTURE_CONFIG: ArchitectureConfig = {
+  layerMatchers: {
+    tests: ['/__tests__/', '.test.', '.spec.'],
+    ui: ['/components/', '/screens/', '/pages/', '/ui/'],
+    domain: ['/domain/', '/entities/', '/models/', '/features/', '/core/', '/services/'],
+    infra: [
+      '/infra/',
+      '/infrastructure/',
+      '/api/',
+      '/gateway/',
+      '/gateways/',
+      '/repository/',
+      '/repositories/',
+      '/store/',
+      '/data/',
+      '/persistence/',
+      '/db/',
+    ],
+    shared: ['/shared/', '/common/', '/utils/', '/helpers/', '/lib/', '/hooks/', '/types/'],
+    unknown: [],
+  },
+  allowedTargets: {
+    ui: ['ui', 'domain', 'shared', 'unknown'],
+    domain: ['domain', 'shared', 'unknown'],
+    infra: ['infra', 'domain', 'shared', 'unknown'],
+    shared: ['shared', 'unknown'],
+    tests: ['ui', 'domain', 'infra', 'shared', 'tests', 'unknown'],
+    unknown: ['ui', 'domain', 'infra', 'shared', 'tests', 'unknown'],
+  },
+}
+
+function architectureConfigDescription(config: ArchitectureConfig) {
+  return ARCHITECTURE_RULE_LAYERS.map((layer) => `${layer} -> ${config.allowedTargets[layer].join('/')}`).join('; ')
+}
+
+function normalizeArchitectureConfig(input: unknown): ArchitectureConfig | null {
+  if (!input || typeof input !== 'object') {
+    return null
+  }
+  const candidate = input as Partial<ArchitectureConfig>
+  const validLayers: ArchitectureLayerId[] = ['ui', 'domain', 'infra', 'shared', 'tests', 'unknown']
+
+  const layerMatchers = {} as Record<ArchitectureLayerId, string[]>
+  const allowedTargets = {} as Record<ArchitectureLayerId, ArchitectureLayerId[]>
+
+  for (const layer of validLayers) {
+    const rawMatchers = candidate.layerMatchers?.[layer]
+    const nextMatchers = Array.isArray(rawMatchers)
+      ? rawMatchers.filter((item): item is string => typeof item === 'string').map((item) => item.toLowerCase().trim()).filter(Boolean)
+      : DEFAULT_ARCHITECTURE_CONFIG.layerMatchers[layer]
+    layerMatchers[layer] = [...new Set(nextMatchers)]
+
+    const rawAllowed = candidate.allowedTargets?.[layer]
+    const nextAllowed = Array.isArray(rawAllowed)
+      ? rawAllowed
+          .filter((item): item is ArchitectureLayerId => typeof item === 'string' && validLayers.includes(item as ArchitectureLayerId))
+      : DEFAULT_ARCHITECTURE_CONFIG.allowedTargets[layer]
+    if (nextAllowed.length === 0) {
+      return null
+    }
+    allowedTargets[layer] = [...new Set(nextAllowed)]
+  }
+
+  return {
+    layerMatchers,
+    allowedTargets,
+  }
+}
+
+function getTopLevelBlockLabelForPath(filePath: string, rootName: string | null | undefined) {
+  if (!rootName) {
+    return '(root)'
+  }
+  const prefix = `${rootName}/`
+  const relativePath = filePath.startsWith(prefix) ? filePath.slice(prefix.length) : filePath
+  const [firstSegment] = relativePath.split('/')
+  return firstSegment || '(root)'
+}
+
+function detectArchitectureLayer(filePath: string, config: ArchitectureConfig): ArchitectureLayerId {
+  const path = filePath.toLowerCase()
+  for (const layer of ARCHITECTURE_LAYER_ORDER) {
+    const patterns = config.layerMatchers[layer]
+    for (const pattern of patterns) {
+      if (path.includes(pattern)) {
+        return layer
+      }
+    }
+  }
+  return 'unknown'
+}
+
+function isArchitectureEdgeAllowed(fromLayer: ArchitectureLayerId, toLayer: ArchitectureLayerId, config: ArchitectureConfig) {
+  return new Set(config.allowedTargets[fromLayer]).has(toLayer)
 }
 
 function findTopCycleGroups(filePaths: string[], edges: Array<{ fromPath: string; toPath: string }>, limit = 5): CycleGroup[] {
@@ -128,11 +241,18 @@ function App() {
   const [directionFilter, setDirectionFilter] = useState<'all' | 'incoming' | 'outgoing'>('all')
   const [edgeKindFilter, setEdgeKindFilter] = useState<EdgeKindFilter>('all')
   const [edgeColorPriority, setEdgeColorPriority] = useState<EdgeColorPriority>('direction')
+  const [highlightArchitectureViolations, setHighlightArchitectureViolations] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
   const [collapsedBlockIds, setCollapsedBlockIds] = useState<Set<string>>(new Set())
   const [autoFolderDepth, setAutoFolderDepth] = useState(true)
   const [manualFolderDepth, setManualFolderDepth] = useState<ManualFolderDepth>(2)
   const [folderControlMode, setFolderControlMode] = useState<FolderControlMode>('preset')
+  const [architectureConfig, setArchitectureConfig] = useState<ArchitectureConfig>(DEFAULT_ARCHITECTURE_CONFIG)
+  const [architectureConfigMode, setArchitectureConfigMode] = useState<ArchitectureConfigMode>('visual')
+  const [architectureConfigDraft, setArchitectureConfigDraft] = useState(
+    JSON.stringify(DEFAULT_ARCHITECTURE_CONFIG, null, 2),
+  )
+  const [architectureConfigError, setArchitectureConfigError] = useState<string | null>(null)
   const [hoveredFilePath, setHoveredFilePath] = useState<string | null>(null)
   const [isCanvasLocked, setIsCanvasLocked] = useState(false)
   const [savedViewport, setSavedViewport] = useState<{ x: number; y: number; zoom: number } | null>(null)
@@ -231,6 +351,23 @@ function App() {
       5,
     )
   }, [dependencyGraph])
+  const cycleFilePathSet = useMemo(() => {
+    if (!dependencyGraph) {
+      return new Set<string>()
+    }
+    const groups = findTopCycleGroups(
+      dependencyGraph.files.map((file) => file.path),
+      dependencyGraph.edges.map((edge) => ({ fromPath: edge.fromPath, toPath: edge.toPath })),
+      Number.MAX_SAFE_INTEGER,
+    )
+    const ids = new Set<string>()
+    for (const group of groups) {
+      for (const filePath of group.filePaths) {
+        ids.add(filePath)
+      }
+    }
+    return ids
+  }, [dependencyGraph])
   const dependencyEdgeKindCounts = useMemo(() => {
     const counts: Record<DependencyEdge['kind'], number> = {
       runtime: 0,
@@ -242,6 +379,338 @@ function App() {
     }
     return counts
   }, [dependencyGraph])
+  const riskByFile = useMemo(() => {
+    if (!dependencyGraph) {
+      return []
+    }
+    const inRuntime = new Map<string, number>()
+    const outRuntime = new Map<string, number>()
+    const inType = new Map<string, number>()
+    const outType = new Map<string, number>()
+    const inReexport = new Map<string, number>()
+    const outReexport = new Map<string, number>()
+
+    for (const edge of dependencyGraph.edges) {
+      if (edge.kind === 'runtime') {
+        inRuntime.set(edge.toPath, (inRuntime.get(edge.toPath) ?? 0) + 1)
+        outRuntime.set(edge.fromPath, (outRuntime.get(edge.fromPath) ?? 0) + 1)
+      } else if (edge.kind === 'type') {
+        inType.set(edge.toPath, (inType.get(edge.toPath) ?? 0) + 1)
+        outType.set(edge.fromPath, (outType.get(edge.fromPath) ?? 0) + 1)
+      } else {
+        inReexport.set(edge.toPath, (inReexport.get(edge.toPath) ?? 0) + 1)
+        outReexport.set(edge.fromPath, (outReexport.get(edge.fromPath) ?? 0) + 1)
+      }
+    }
+
+    return dependencyGraph.files
+      .map((file) => {
+        const incomingRuntime = inRuntime.get(file.path) ?? 0
+        const outgoingRuntime = outRuntime.get(file.path) ?? 0
+        const incomingType = inType.get(file.path) ?? 0
+        const outgoingType = outType.get(file.path) ?? 0
+        const incomingReexport = inReexport.get(file.path) ?? 0
+        const outgoingReexport = outReexport.get(file.path) ?? 0
+        const loc = fileLocByPath.get(file.path) ?? 0
+        const cycleBoost = cycleFilePathSet.has(file.path) ? 6 : 0
+        const score =
+          incomingRuntime * 2.4 +
+          outgoingRuntime * 1.35 +
+          incomingType * 0.8 +
+          outgoingType * 0.6 +
+          incomingReexport * 1.1 +
+          outgoingReexport * 1.2 +
+          Math.round(loc / 220) +
+          cycleBoost
+
+        return {
+          path: file.path,
+          score: Number(score.toFixed(2)),
+          incomingRuntime,
+          outgoingRuntime,
+          incomingType,
+          outgoingType,
+          incomingReexport,
+          outgoingReexport,
+        }
+      })
+      .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+      .slice(0, 12)
+  }, [dependencyGraph, fileLocByPath, cycleFilePathSet])
+  const riskByBlock = useMemo(() => {
+    if (!scanResult || riskByFile.length === 0 || !dependencyGraph) {
+      return []
+    }
+    const aggregated = new Map<
+      string,
+      {
+        scoreSum: number
+        fileCount: number
+        incomingCrossBlockRuntime: number
+        outgoingCrossBlockRuntime: number
+      }
+    >()
+
+    const ensureBlock = (label: string) => {
+      const existing = aggregated.get(label)
+      if (existing) {
+        return existing
+      }
+      const created = {
+        scoreSum: 0,
+        fileCount: 0,
+        incomingCrossBlockRuntime: 0,
+        outgoingCrossBlockRuntime: 0,
+      }
+      aggregated.set(label, created)
+      return created
+    }
+
+    for (const fileRisk of riskByFile) {
+      const blockLabel = getTopLevelBlockLabelForPath(fileRisk.path, scanResult.rootName)
+      const bucket = ensureBlock(blockLabel)
+      bucket.scoreSum += fileRisk.score
+      bucket.fileCount += 1
+    }
+
+    for (const edge of dependencyGraph.edges) {
+      if (edge.kind !== 'runtime') {
+        continue
+      }
+      const sourceBlock = getTopLevelBlockLabelForPath(edge.fromPath, scanResult.rootName)
+      const targetBlock = getTopLevelBlockLabelForPath(edge.toPath, scanResult.rootName)
+      if (sourceBlock === targetBlock) {
+        continue
+      }
+      ensureBlock(sourceBlock).outgoingCrossBlockRuntime += 1
+      ensureBlock(targetBlock).incomingCrossBlockRuntime += 1
+    }
+
+    return [...aggregated.entries()]
+      .map(([label, bucket]) => {
+        const normalized = bucket.scoreSum / Math.sqrt(Math.max(bucket.fileCount, 1))
+        const score = normalized + bucket.incomingCrossBlockRuntime * 1.4 + bucket.outgoingCrossBlockRuntime
+        return {
+          label,
+          score: Number(score.toFixed(2)),
+          fileCount: bucket.fileCount,
+          incomingCrossBlockRuntime: bucket.incomingCrossBlockRuntime,
+          outgoingCrossBlockRuntime: bucket.outgoingCrossBlockRuntime,
+        }
+      })
+      .sort((left, right) => right.score - left.score || left.label.localeCompare(right.label))
+      .slice(0, 8)
+  }, [scanResult, dependencyGraph, riskByFile])
+  const architectureLayerByPath = useMemo(() => {
+    const map = new Map<string, ArchitectureLayerId>()
+    for (const file of dependencyGraph?.files ?? []) {
+      map.set(file.path, detectArchitectureLayer(file.path, architectureConfig))
+    }
+    return map
+  }, [dependencyGraph, architectureConfig])
+  const architectureLayerDistribution = useMemo(() => {
+    const counts: Record<ArchitectureLayerId, number> = {
+      ui: 0,
+      domain: 0,
+      infra: 0,
+      shared: 0,
+      tests: 0,
+      unknown: 0,
+    }
+    for (const layer of architectureLayerByPath.values()) {
+      counts[layer] += 1
+    }
+    return counts
+  }, [architectureLayerByPath])
+  const architectureViolations = useMemo(() => {
+    if (!dependencyGraph) {
+      return []
+    }
+    const violations: ArchitectureViolation[] = []
+    for (const edge of dependencyGraph.edges) {
+      const fromLayer = architectureLayerByPath.get(edge.fromPath) ?? 'unknown'
+      const toLayer = architectureLayerByPath.get(edge.toPath) ?? 'unknown'
+      if (isArchitectureEdgeAllowed(fromLayer, toLayer, architectureConfig)) {
+        continue
+      }
+      violations.push({
+        fromPath: edge.fromPath,
+        toPath: edge.toPath,
+        fromLayer,
+        toLayer,
+        kind: edge.kind,
+      })
+    }
+    return violations
+      .sort(
+        (left, right) =>
+          left.fromLayer.localeCompare(right.fromLayer) ||
+          left.toLayer.localeCompare(right.toLayer) ||
+          left.fromPath.localeCompare(right.fromPath) ||
+          left.toPath.localeCompare(right.toPath),
+      )
+      .slice(0, 40)
+  }, [dependencyGraph, architectureLayerByPath, architectureConfig])
+  const architectureViolationByPair = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const violation of architectureViolations) {
+      const key = `${violation.fromLayer}->${violation.toLayer}`
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return [...counts.entries()]
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      .slice(0, 10)
+  }, [architectureViolations])
+  const architectureViolationByKind = useMemo(() => {
+    const counts: Record<DependencyEdge['kind'], number> = {
+      runtime: 0,
+      type: 0,
+      're-export': 0,
+    }
+    for (const violation of architectureViolations) {
+      counts[violation.kind] += 1
+    }
+    return counts
+  }, [architectureViolations])
+  const architectureRuleLines = useMemo(
+    () => ARCHITECTURE_RULE_LAYERS.map((layer) => `${layer} -> ${architectureConfig.allowedTargets[layer].join('/')}`),
+    [architectureConfig],
+  )
+  const refactorSignalStatsByPath = useMemo(() => {
+    const stats = new Map<
+      string,
+      {
+        incomingRuntime: number
+        outgoingRuntime: number
+        incomingType: number
+        outgoingType: number
+        incomingReexport: number
+        outgoingReexport: number
+      }
+    >()
+    const ensure = (path: string) => {
+      const existing = stats.get(path)
+      if (existing) {
+        return existing
+      }
+      const created = {
+        incomingRuntime: 0,
+        outgoingRuntime: 0,
+        incomingType: 0,
+        outgoingType: 0,
+        incomingReexport: 0,
+        outgoingReexport: 0,
+      }
+      stats.set(path, created)
+      return created
+    }
+    for (const file of dependencyGraph?.files ?? []) {
+      ensure(file.path)
+    }
+    for (const edge of dependencyGraph?.edges ?? []) {
+      const from = ensure(edge.fromPath)
+      const to = ensure(edge.toPath)
+      if (edge.kind === 'runtime') {
+        from.outgoingRuntime += 1
+        to.incomingRuntime += 1
+      } else if (edge.kind === 'type') {
+        from.outgoingType += 1
+        to.incomingType += 1
+      } else {
+        from.outgoingReexport += 1
+        to.incomingReexport += 1
+      }
+    }
+    return stats
+  }, [dependencyGraph])
+  const orphanRuntimeModules = useMemo(() => {
+    if (!dependencyGraph) {
+      return []
+    }
+    return dependencyGraph.files
+      .filter((file) => {
+        const stats = refactorSignalStatsByPath.get(file.path)
+        if (!stats) {
+          return false
+        }
+        const lower = file.path.toLowerCase()
+        if (lower.includes('/__tests__/') || lower.includes('.test.') || lower.includes('.spec.')) {
+          return false
+        }
+        return stats.incomingRuntime === 0 && stats.outgoingRuntime === 0
+      })
+      .map((file) => {
+        const stats = refactorSignalStatsByPath.get(file.path)!
+        return {
+          path: file.path,
+          exports: file.exports.length,
+          typeTouches: stats.incomingType + stats.outgoingType,
+          reexportTouches: stats.incomingReexport + stats.outgoingReexport,
+        }
+      })
+      .sort(
+        (left, right) =>
+          right.exports - left.exports ||
+          right.typeTouches - left.typeTouches ||
+          left.path.localeCompare(right.path),
+      )
+      .slice(0, 20)
+  }, [dependencyGraph, refactorSignalStatsByPath])
+  const reexportHubFiles = useMemo(() => {
+    if (!dependencyGraph) {
+      return []
+    }
+    return dependencyGraph.files
+      .map((file) => {
+        const stats = refactorSignalStatsByPath.get(file.path)
+        const outgoingReexport = stats?.outgoingReexport ?? 0
+        const incomingRuntime = stats?.incomingRuntime ?? 0
+        return {
+          path: file.path,
+          outgoingReexport,
+          incomingRuntime,
+          exports: file.exports.length,
+        }
+      })
+      .filter((item) => item.outgoingReexport > 0)
+      .sort(
+        (left, right) =>
+          right.outgoingReexport - left.outgoingReexport ||
+          right.incomingRuntime - left.incomingRuntime ||
+          left.path.localeCompare(right.path),
+      )
+      .slice(0, 20)
+  }, [dependencyGraph, refactorSignalStatsByPath])
+  const architectureViolationEdgeKeySet = useMemo(() => {
+    const keys = new Set<string>()
+    for (const item of architectureViolations) {
+      keys.add(`${item.fromPath}->${item.toPath}`)
+    }
+    return keys
+  }, [architectureViolations])
+  const architectureViolationBlockPairCount = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const item of architectureViolations) {
+      const sourceBlock = `block:${getTopLevelBlockLabelForPath(item.fromPath, scanResult?.rootName)}`
+      const targetBlock = `block:${getTopLevelBlockLabelForPath(item.toPath, scanResult?.rootName)}`
+      if (sourceBlock === targetBlock) {
+        continue
+      }
+      const key = `${sourceBlock}->${targetBlock}`
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return counts
+  }, [architectureViolations, scanResult?.rootName])
+  const architectureViolationNodeIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const item of architectureViolations) {
+      ids.add(`file:${item.fromPath}`)
+      ids.add(`file:${item.toPath}`)
+      ids.add(`block:${getTopLevelBlockLabelForPath(item.fromPath, scanResult?.rootName)}`)
+      ids.add(`block:${getTopLevelBlockLabelForPath(item.toPath, scanResult?.rootName)}`)
+    }
+    return ids
+  }, [architectureViolations, scanResult?.rootName])
 
   const flowGraph = useMemo(() => {
     if (!scanResult || !dependencyGraph) {
@@ -395,6 +864,7 @@ function App() {
         const isBlockWithMatch = blockIdsWithMatches.has(node.id)
         const isIncomingRelated = incomingRelatedNodeIds.has(node.id)
         const isOutgoingRelated = outgoingRelatedNodeIds.has(node.id)
+        const isArchitectureViolationNode = architectureViolationNodeIds.has(node.id)
         const nextStyle = {
           ...(node.style ?? {}),
           opacity: 1,
@@ -427,6 +897,15 @@ function App() {
         } else if (!isSelected) {
           nextStyle.boxShadow = 'none'
         }
+        if (highlightArchitectureViolations && isArchitectureViolationNode && !isSelected) {
+          if (!selectedNodeId) {
+            nextStyle.boxShadow = '0 0 0 2px rgba(255, 107, 154, 0.45)'
+          }
+          nextStyle.outline = '1px solid rgba(255, 107, 154, 0.95)'
+          nextStyle.outlineOffset = '1px'
+        } else {
+          nextStyle.outline = 'none'
+        }
         return {
           ...node,
           style: nextStyle,
@@ -443,6 +922,8 @@ function App() {
     normalizedSearchQuery,
     matchingFileNodeIds,
     blockIdsWithMatches,
+    architectureViolationNodeIds,
+    highlightArchitectureViolations,
   ])
 
   const displayEdges = useMemo<Edge[]>(() => {
@@ -735,15 +1216,26 @@ function App() {
       const isIncoming = selectedNodeId ? edge.target === selectedNodeId : false
       const isOutgoing = selectedNodeId ? edge.source === selectedNodeId : false
       const isConnected = isIncoming || isOutgoing
+      const isFileViolationEdge =
+        edge.source.startsWith('file:') &&
+        edge.target.startsWith('file:') &&
+        architectureViolationEdgeKeySet.has(`${edge.source.slice(5)}->${edge.target.slice(5)}`)
+      const isBlockViolationEdge =
+        edge.source.startsWith('block:') &&
+        edge.target.startsWith('block:') &&
+        (architectureViolationBlockPairCount.get(`${edge.source}->${edge.target}`) ?? 0) > 0
+      const isArchitectureViolationEdge = isFileViolationEdge || isBlockViolationEdge
 
       const dependencyKind = edge.data?.dependencyKind as DependencyEdge['kind'] | undefined
       const kindColor = dependencyKind === 'type' ? '#b792ff' : dependencyKind === 're-export' ? '#59ccff' : '#7ea3bd'
-      let color = kindColor
+      let color = isArchitectureViolationEdge && highlightArchitectureViolations ? '#ff6b9a' : kindColor
       let strokeWidth = Math.max(Number(edge.style?.strokeWidth ?? 0), 1.4)
       const isCycleColored = String(edge.style?.stroke ?? '').startsWith('#ff')
 
       if (selectedNodeId && isConnected) {
-        if (edgeColorPriority === 'direction') {
+        if (isArchitectureViolationEdge && highlightArchitectureViolations) {
+          color = '#ff6b9a'
+        } else if (edgeColorPriority === 'direction') {
           if (isOutgoing && !isIncoming) {
             color = '#f5b04d'
           } else if (isIncoming && !isOutgoing) {
@@ -754,11 +1246,15 @@ function App() {
         } else {
           color = kindColor
         }
-        strokeWidth = Math.max(strokeWidth, 2)
+        strokeWidth = Math.max(strokeWidth, isArchitectureViolationEdge && highlightArchitectureViolations ? 2.8 : 2)
       } else if (isCycleColored) {
         color = String(edge.style?.stroke)
       } else {
-        color = kindColor
+        color = isArchitectureViolationEdge && highlightArchitectureViolations ? '#ff6b9a' : kindColor
+      }
+
+      if (isArchitectureViolationEdge && highlightArchitectureViolations) {
+        strokeWidth = Math.max(strokeWidth, 2.4)
       }
 
       const baseEdge: Edge = {
@@ -863,6 +1359,9 @@ function App() {
     selectedNodeId,
     directionFilter,
     edgeColorPriority,
+    architectureViolationEdgeKeySet,
+    architectureViolationBlockPairCount,
+    highlightArchitectureViolations,
   ])
 
 
@@ -918,12 +1417,34 @@ function App() {
     setIsCanvasLocked(false)
     setSavedViewport(null)
     setActiveTab('overview')
-  }, [graphMode, scanResult?.rootName])
+  }, [scanResult?.rootName])
 
   useEffect(() => {
     setSelectedNodeId(null)
     setDirectionFilter('all')
   }, [routingStyle, busDisplayMode, folderPacking])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    try {
+      const raw = window.localStorage.getItem(ARCHITECTURE_STORAGE_KEY)
+      if (!raw) {
+        return
+      }
+      const parsed = JSON.parse(raw) as unknown
+      const normalized = normalizeArchitectureConfig(parsed)
+      if (!normalized) {
+        return
+      }
+      setArchitectureConfig(normalized)
+      setArchitectureConfigDraft(JSON.stringify(normalized, null, 2))
+      setArchitectureConfigError(null)
+    } catch {
+      setArchitectureConfigError('Failed to load architecture config preset from localStorage.')
+    }
+  }, [])
 
   async function readProjectReadme(directoryHandle: FileSystemDirectoryHandle) {
     const candidateNames = ['README.md', 'Readme.md', 'readme.md', 'README.MD']
@@ -1144,6 +1665,72 @@ function App() {
     applyFolderDepthPreset(chosenDepth)
   }
 
+  function applyArchitectureConfigDraft() {
+    try {
+      const parsed = JSON.parse(architectureConfigDraft) as unknown
+      const normalized = normalizeArchitectureConfig(parsed)
+      if (!normalized) {
+        setArchitectureConfigError('Invalid config shape. Check layer names and allowed targets.')
+        return
+      }
+      applyArchitectureConfig(normalized)
+    } catch {
+      setArchitectureConfigError('Invalid JSON format for architecture config.')
+    }
+  }
+
+  function applyArchitectureConfig(nextConfig: ArchitectureConfig) {
+    setArchitectureConfig(nextConfig)
+    setArchitectureConfigDraft(JSON.stringify(nextConfig, null, 2))
+    setArchitectureConfigError(null)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(ARCHITECTURE_STORAGE_KEY, JSON.stringify(nextConfig))
+    }
+  }
+
+  function updateArchitectureAllowedTarget(
+    fromLayer: ArchitectureLayerId,
+    toLayer: ArchitectureLayerId,
+    isAllowed: boolean,
+  ) {
+    const existing = architectureConfig.allowedTargets[fromLayer]
+    const nextTargets = isAllowed
+      ? [...new Set([...existing, toLayer])]
+      : existing.filter((item) => item !== toLayer)
+    if (nextTargets.length === 0) {
+      setArchitectureConfigError(`Layer "${fromLayer}" must allow at least one target layer.`)
+      return
+    }
+    applyArchitectureConfig({
+      ...architectureConfig,
+      allowedTargets: {
+        ...architectureConfig.allowedTargets,
+        [fromLayer]: nextTargets,
+      },
+    })
+  }
+
+  function updateArchitectureMatchers(layer: ArchitectureLayerId, csvValue: string) {
+    const nextMatchers = csvValue
+      .split(',')
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean)
+    applyArchitectureConfig({
+      ...architectureConfig,
+      layerMatchers: {
+        ...architectureConfig.layerMatchers,
+        [layer]: [...new Set(nextMatchers)],
+      },
+    })
+  }
+
+  function resetArchitectureConfig() {
+    applyArchitectureConfig(DEFAULT_ARCHITECTURE_CONFIG)
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(ARCHITECTURE_STORAGE_KEY)
+    }
+  }
+
   const collapsibleBlockIds = useMemo(() => {
     const ids = new Set<string>()
     for (const node of flowGraph?.nodes ?? []) {
@@ -1182,6 +1769,21 @@ function App() {
     }
   }
 
+  function focusFileOnBoard(filePath: string) {
+    setGraphMode('file-level')
+    setSelectedNodeId(`file:${filePath}`)
+    setDirectionFilter('all')
+    setActiveTab('board')
+  }
+
+  function focusViolationOnBoard(violation: ArchitectureViolation) {
+    setGraphMode('file-level')
+    setSelectedNodeId(`file:${violation.fromPath}`)
+    setDirectionFilter('outgoing')
+    setEdgeKindFilter(violation.kind)
+    setActiveTab('board')
+  }
+
   useEffect(() => {
     if (!flowGraph || graphMode !== 'file-level') {
       return
@@ -1218,6 +1820,13 @@ function App() {
           onClick={() => setActiveTab('diagnostics')}
         >
           Diagnostics
+        </button>
+        <button
+          type="button"
+          className={activeTab === 'architecture' ? 'is-active' : ''}
+          onClick={() => setActiveTab('architecture')}
+        >
+          Architecture
         </button>
         <button
           type="button"
@@ -1357,76 +1966,388 @@ function App() {
       )}
 
       {activeTab === 'diagnostics' && (
-        <section className="panel grid">
+        <section className="panel grid diagnostics-grid">
           <div className="stats">
-            <h2>Resolver Diagnostics</h2>
-            <p>
-              <strong>Unresolved Imports:</strong> {dependencyGraph?.unresolvedImportCount ?? 0}
-            </p>
-            <p>
-              <strong>Unresolved External:</strong> {dependencyGraph?.unresolvedExternalCount ?? 0}
-            </p>
-            <p>
-              <strong>Unresolved Internal:</strong> {dependencyGraph?.unresolvedInternalCount ?? 0}
-            </p>
-            <p>
-              <strong>Alias Resolved:</strong> {dependencyGraph?.aliasResolvedCount ?? 0}
-            </p>
-            <p>
-              <strong>Layout Status:</strong> {isLayouting ? 'running' : 'ready'}
-            </p>
-            <h2>Code Health (MVP)</h2>
-            <p>
-              <strong>Hotspots:</strong> {hotspotFiles.length}
-            </p>
-            <p>
-              <strong>Potential dead export files:</strong> {potentiallyDeadExportFiles.length}
-            </p>
-            <p>
-              <strong>Cycle groups:</strong> {topCycleGroups.length}
-            </p>
-            <p>
-              <strong>Edge kinds:</strong> runtime {dependencyEdgeKindCounts.runtime}, type {dependencyEdgeKindCounts.type},
-              re-export {dependencyEdgeKindCounts['re-export']}
-            </p>
+            <div className="section-card">
+              <h2>Resolver Diagnostics</h2>
+              <p>
+                <strong>Unresolved Imports:</strong> {dependencyGraph?.unresolvedImportCount ?? 0}
+              </p>
+              <p>
+                <strong>Unresolved External:</strong> {dependencyGraph?.unresolvedExternalCount ?? 0}
+              </p>
+              <p>
+                <strong>Unresolved Internal:</strong> {dependencyGraph?.unresolvedInternalCount ?? 0}
+              </p>
+              <p>
+                <strong>Alias Resolved:</strong> {dependencyGraph?.aliasResolvedCount ?? 0}
+              </p>
+              <p>
+                <strong>Layout Status:</strong> {isLayouting ? 'running' : 'ready'}
+              </p>
+            </div>
+
+            <div className="section-card">
+              <h2>Code Health (MVP)</h2>
+              <p>
+                <strong>Hotspots:</strong> {hotspotFiles.length}
+              </p>
+              <p>
+                <strong>Potential dead export files:</strong> {potentiallyDeadExportFiles.length}
+              </p>
+              <p>
+                <strong>Cycle groups:</strong> {topCycleGroups.length}
+              </p>
+              <p>
+                <strong>Edge kinds:</strong> runtime {dependencyEdgeKindCounts.runtime}, type {dependencyEdgeKindCounts.type},
+                re-export {dependencyEdgeKindCounts['re-export']}
+              </p>
+              <p>
+                <strong>Risky files:</strong> {riskByFile.length}
+              </p>
+              <p>
+                <strong>Risky blocks:</strong> {riskByBlock.length}
+              </p>
+            </div>
+
+            <div className="section-card">
+              <h2>Refactor Signals</h2>
+              <p>
+                <strong>Orphan runtime modules:</strong> {orphanRuntimeModules.length}
+              </p>
+              <p>
+                <strong>Re-export hubs:</strong> {reexportHubFiles.length}
+              </p>
+              {orphanRuntimeModules.length > 0 && (
+                <>
+                  <h2>Orphan Candidates</h2>
+                  <ul className="quick-action-list">
+                    {orphanRuntimeModules.slice(0, 8).map((item) => (
+                      <li key={`orphan-${item.path}`}>
+                        <code>{item.path}</code>
+                        <button type="button" className="quick-action-button" onClick={() => focusFileOnBoard(item.path)}>
+                          Show on Board
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {reexportHubFiles.length > 0 && (
+                <>
+                  <h2>Re-export Hubs</h2>
+                  <ul className="quick-action-list">
+                    {reexportHubFiles.slice(0, 8).map((item) => (
+                      <li key={`rehub-${item.path}`}>
+                        <code>{item.path}</code>
+                        <button type="button" className="quick-action-button" onClick={() => focusFileOnBoard(item.path)}>
+                          Show on Board
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+
+            <div className="section-card">
+              <h2>Architecture Rules</h2>
+              <ul className="rule-list">
+                {architectureRuleLines.map((line) => (
+                  <li key={`diag-rule-${line}`}>{line}</li>
+                ))}
+              </ul>
+              <p>
+                <strong>Violations:</strong> {architectureViolations.length}
+              </p>
+              <p>
+                <strong>Violations by kind:</strong> runtime {architectureViolationByKind.runtime}, type{' '}
+                {architectureViolationByKind.type}, re-export {architectureViolationByKind['re-export']}
+              </p>
+              <p>
+                <strong>Layer distribution:</strong> ui {architectureLayerDistribution.ui}, domain {architectureLayerDistribution.domain},
+                infra {architectureLayerDistribution.infra}, shared {architectureLayerDistribution.shared}, tests{' '}
+                {architectureLayerDistribution.tests}, unknown {architectureLayerDistribution.unknown}
+              </p>
+            </div>
           </div>
-          <div className="tree">
-            <h2>Code Health Details</h2>
-            <pre>
-              Hotspots (score = in*2 + out + LOC factor):
-              {hotspotFiles.length > 0
-                ? `\n${hotspotFiles
-                    .map(
-                      (item) =>
-                        `- ${item.path} | score=${item.score} | in=${item.incoming} | out=${item.outgoing} | loc=${item.loc}`,
-                    )
-                    .join('\n')}`
-                : '\n- no data'}
-              {'\n\n'}
-              Potential dead export files (no internal incoming edges):
-              {potentiallyDeadExportFiles.length > 0
-                ? `\n${potentiallyDeadExportFiles
-                    .map((file) => `- ${file.path} | exports=${file.exports.length} | symbols=${file.exports.join(', ')}`)
-                    .join('\n')}`
-                : '\n- no candidates'}
-              {'\n\n'}
-              Top cycle groups:
-              {topCycleGroups.length > 0
-                ? `\n${topCycleGroups
-                    .map((group) => `- cycle-${group.id} | size=${group.size} | ${group.filePaths.join(' -> ')}`)
-                    .join('\n')}`
-                : '\n- no cycles'}
-              {'\n\n'}
-              Selection / Hover:
-              {'\n'}
-              {selectedNodeId ? `Selected: ${selectedNodeId}\n` : 'Selected: -\n'}
-              {hoveredFilePath ? `Hover: ${hoveredFilePath}\n` : 'Hover: -\n'}
-              {hoveredFileAnalysis
-                ? `Exports: ${
-                    hoveredFileAnalysis.exports.length > 0 ? hoveredFileAnalysis.exports.join(', ') : 'none'
-                  }`
-                : 'Exports: -'}
-            </pre>
+          <div className="tree right-stack">
+            <div className="section-card">
+              <h2>Code Health Details</h2>
+              <pre className="report-pre">
+                Hotspots (score = in*2 + out + LOC factor):
+                {hotspotFiles.length > 0
+                  ? `\n${hotspotFiles
+                      .map(
+                        (item) =>
+                          `- ${item.path} | score=${item.score} | in=${item.incoming} | out=${item.outgoing} | loc=${item.loc}`,
+                      )
+                      .join('\n')}`
+                  : '\n- no data'}
+                {'\n\n'}
+                Potential dead export files (no internal incoming edges):
+                {potentiallyDeadExportFiles.length > 0
+                  ? `\n${potentiallyDeadExportFiles
+                      .map((file) => `- ${file.path} | exports=${file.exports.length} | symbols=${file.exports.join(', ')}`)
+                      .join('\n')}`
+                  : '\n- no candidates'}
+                {'\n\n'}
+                Top cycle groups:
+                {topCycleGroups.length > 0
+                  ? `\n${topCycleGroups
+                      .map((group) => `- cycle-${group.id} | size=${group.size} | ${group.filePaths.join(' -> ')}`)
+                      .join('\n')}`
+                  : '\n- no cycles'}
+              </pre>
+            </div>
+
+            <div className="section-card">
+              <h2>Risk & Refactor</h2>
+              <pre className="report-pre">
+                Dependency Quality Risk (files):
+                {riskByFile.length > 0
+                  ? `\n${riskByFile
+                      .map(
+                        (item) =>
+                          `- ${item.path} | score=${item.score} | runtime ${item.incomingRuntime}/${item.outgoingRuntime} | type ${item.incomingType}/${item.outgoingType} | re-export ${item.incomingReexport}/${item.outgoingReexport}`,
+                      )
+                      .join('\n')}`
+                  : '\n- no data'}
+                {'\n\n'}
+                Dependency Quality Risk (blocks):
+                {riskByBlock.length > 0
+                  ? `\n${riskByBlock
+                      .map(
+                        (item) =>
+                          `- ${item.label} | score=${item.score} | files=${item.fileCount} | cross runtime in=${item.incomingCrossBlockRuntime} out=${item.outgoingCrossBlockRuntime}`,
+                      )
+                      .join('\n')}`
+                  : '\n- no data'}
+                {'\n\n'}
+                Refactor signals - orphan runtime modules:
+                {orphanRuntimeModules.length > 0
+                  ? `\n${orphanRuntimeModules
+                      .map(
+                        (item) =>
+                          `- ${item.path} | exports=${item.exports} | typeTouches=${item.typeTouches} | reexportTouches=${item.reexportTouches}`,
+                      )
+                      .join('\n')}`
+                  : '\n- no candidates'}
+                {'\n\n'}
+                Refactor signals - re-export hubs:
+                {reexportHubFiles.length > 0
+                  ? `\n${reexportHubFiles
+                      .map(
+                        (item) =>
+                          `- ${item.path} | re-export out=${item.outgoingReexport} | runtime in=${item.incomingRuntime} | exports=${item.exports}`,
+                      )
+                      .join('\n')}`
+                  : '\n- no candidates'}
+              </pre>
+            </div>
+
+            <div className="section-card">
+              <h2>Architecture & Selection</h2>
+              <pre className="report-pre">
+                Architecture rule set:
+                {'\n'}- {architectureConfigDescription(architectureConfig)}
+                {'\n\n'}
+                Architecture violations by layer pair:
+                {architectureViolationByPair.length > 0
+                  ? `\n${architectureViolationByPair.map(([pair, count]) => `- ${pair}: ${count}`).join('\n')}`
+                  : '\n- no violations'}
+                {'\n\n'}
+                Architecture violations (sample):
+                {architectureViolations.length > 0
+                  ? `\n${architectureViolations
+                      .slice(0, 20)
+                      .map(
+                        (item) =>
+                          `- [${item.kind}] ${item.fromLayer}->${item.toLayer} | ${item.fromPath} -> ${item.toPath}`,
+                      )
+                      .join('\n')}`
+                  : '\n- no violations'}
+                {'\n\n'}
+                Selection / Hover:
+                {'\n'}
+                {selectedNodeId ? `Selected: ${selectedNodeId}\n` : 'Selected: -\n'}
+                {hoveredFilePath ? `Hover: ${hoveredFilePath}\n` : 'Hover: -\n'}
+                {hoveredFileAnalysis
+                  ? `Exports: ${
+                      hoveredFileAnalysis.exports.length > 0 ? hoveredFileAnalysis.exports.join(', ') : 'none'
+                    }`
+                  : 'Exports: -'}
+              </pre>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {activeTab === 'architecture' && (
+        <section className="panel grid architecture-grid">
+          <div className="stats">
+            <div className="section-card">
+              <h2>Architecture Rules</h2>
+              <ul className="rule-list">
+                {architectureRuleLines.map((line) => (
+                  <li key={`arch-rule-${line}`}>{line}</li>
+                ))}
+              </ul>
+              <p>
+                <strong>Violations:</strong> {architectureViolations.length}
+              </p>
+              <p>
+                <strong>Violations by kind:</strong> runtime {architectureViolationByKind.runtime}, type{' '}
+                {architectureViolationByKind.type}, re-export {architectureViolationByKind['re-export']}
+              </p>
+              <p>
+                <strong>Layer distribution:</strong> ui {architectureLayerDistribution.ui}, domain {architectureLayerDistribution.domain},
+                infra {architectureLayerDistribution.infra}, shared {architectureLayerDistribution.shared}, tests{' '}
+                {architectureLayerDistribution.tests}, unknown {architectureLayerDistribution.unknown}
+              </p>
+            </div>
+
+            <div className="section-card">
+              <h2>Architecture Config</h2>
+              <div className="architecture-config-panel">
+                <div className="architecture-config-mode">
+                  <button
+                    type="button"
+                    className={architectureConfigMode === 'visual' ? 'is-active' : ''}
+                    onClick={() => setArchitectureConfigMode('visual')}
+                  >
+                    Visual
+                  </button>
+                  <button
+                    type="button"
+                    className={architectureConfigMode === 'json' ? 'is-active' : ''}
+                    onClick={() => setArchitectureConfigMode('json')}
+                  >
+                    Advanced JSON
+                  </button>
+                </div>
+                {architectureConfigMode === 'visual' ? (
+                  <div className="architecture-visual-editor">
+                    <p className="hint">
+                      Layer matchers (comma-separated path fragments). First matched layer in priority order wins.
+                    </p>
+                    {ARCHITECTURE_MATCHER_LAYERS.map((layer) => (
+                      <label key={layer} className="architecture-matcher-row">
+                        <span>{layer}</span>
+                        <input
+                          type="text"
+                          value={architectureConfig.layerMatchers[layer].join(', ')}
+                          onChange={(event) => updateArchitectureMatchers(layer, event.target.value)}
+                          placeholder="e.g. /components/, /ui/"
+                        />
+                      </label>
+                    ))}
+                    <p className="hint">Allowed dependency directions:</p>
+                    <div className="architecture-matrix-wrap">
+                      <table className="architecture-matrix">
+                        <thead>
+                          <tr>
+                            <th>From \\ To</th>
+                            {ARCHITECTURE_RULE_LAYERS.map((layer) => (
+                              <th key={`head-${layer}`}>{layer}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {ARCHITECTURE_RULE_LAYERS.map((fromLayer) => (
+                            <tr key={`row-${fromLayer}`}>
+                              <th>{fromLayer}</th>
+                              {ARCHITECTURE_RULE_LAYERS.map((toLayer) => {
+                                const isAllowed = architectureConfig.allowedTargets[fromLayer].includes(toLayer)
+                                return (
+                                  <td key={`${fromLayer}->${toLayer}`}>
+                                    <input
+                                      type="checkbox"
+                                      checked={isAllowed}
+                                      onChange={(event) =>
+                                        updateArchitectureAllowedTarget(fromLayer, toLayer, event.target.checked)
+                                      }
+                                    />
+                                  </td>
+                                )
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <textarea
+                    value={architectureConfigDraft}
+                    onChange={(event) => setArchitectureConfigDraft(event.target.value)}
+                    spellCheck={false}
+                    rows={12}
+                  />
+                )}
+                <div className="architecture-config-actions">
+                  {architectureConfigMode === 'json' && (
+                    <button type="button" onClick={applyArchitectureConfigDraft}>
+                      Apply config
+                    </button>
+                  )}
+                  <button type="button" onClick={resetArchitectureConfig}>
+                    Reset default
+                  </button>
+                </div>
+                {architectureConfigError && <p className="error">{architectureConfigError}</p>}
+              </div>
+            </div>
+
+            {architectureViolations.length > 0 && (
+              <div className="section-card">
+                <h2>Violation Quick Actions</h2>
+                <ul className="quick-action-list">
+                  {architectureViolations.slice(0, 12).map((item) => (
+                    <li key={`arch-v-${item.kind}-${item.fromPath}-${item.toPath}`}>
+                      <code>
+                        [{item.kind}] {item.fromLayer}-&gt;{item.toLayer}: {item.fromPath}
+                      </code>
+                      <button
+                        type="button"
+                        className="quick-action-button"
+                        onClick={() => focusViolationOnBoard(item)}
+                      >
+                        Show on Board
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+          <div className="tree right-stack">
+            <div className="section-card">
+              <h2>Architecture Rules Snapshot</h2>
+              <pre className="report-pre">{architectureRuleLines.map((line) => `- ${line}`).join('\n')}</pre>
+            </div>
+            <div className="section-card">
+              <h2>Violations by Layer Pair</h2>
+              <pre className="report-pre">
+                {architectureViolationByPair.length > 0
+                  ? architectureViolationByPair.map(([pair, count]) => `- ${pair}: ${count}`).join('\n')
+                  : '- no violations'}
+              </pre>
+            </div>
+            <div className="section-card">
+              <h2>Violation Sample</h2>
+              <pre className="report-pre">
+                {architectureViolations.length > 0
+                  ? architectureViolations
+                      .slice(0, 40)
+                      .map(
+                        (item) =>
+                          `- [${item.kind}] ${item.fromLayer}->${item.toLayer} | ${item.fromPath} -> ${item.toPath}`,
+                      )
+                      .join('\n')
+                  : '- no violations'}
+              </pre>
+            </div>
           </div>
         </section>
       )}
@@ -1461,6 +2382,14 @@ function App() {
                   onChange={(event) => setHighlightCycles(event.target.checked)}
                 />
                 Highlight cycles
+              </label>
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={highlightArchitectureViolations}
+                  onChange={(event) => setHighlightArchitectureViolations(event.target.checked)}
+                />
+                Highlight architecture violations
               </label>
               <label className="toggle-row">
                 Direction
@@ -1619,6 +2548,10 @@ function App() {
                 Re-export edge
               </span>
               <span className="legend-item">
+                <span className="legend-swatch legend-swatch-violation" />
+                Architecture violation
+              </span>
+              <span className="legend-item">
                 <span className="legend-swatch legend-swatch-import" />
                 Incoming (selected)
               </span>
@@ -1646,6 +2579,8 @@ function App() {
                       routingStyle === 'classic'
                         ? `${selectedNodeId ?? 'none'}-${directionFilter}-${edgeKindFilter}-${edgeColorPriority}`
                         : `stable-${edgeKindFilter}-${edgeColorPriority}`
+                    }-${highlightArchitectureViolations ? 'arch-on' : 'arch-off'}-${
+                      architectureViolations.length
                     }`}
                     nodes={visibleNodes}
                     edges={displayEdges}

@@ -81,6 +81,12 @@ button:disabled {
   gap: 16px;
 }
 
+.diagnostics-grid,
+.architecture-grid {
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  align-items: start;
+}
+
 .board-grid {
   grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
   align-items: start;
@@ -256,6 +262,32 @@ button:disabled {
   color: #b7d4ea;
 }
 
+.section-card {
+  border: 1px solid rgba(96, 136, 173, 0.42);
+  border-radius: 10px;
+  background: rgba(4, 13, 24, 0.66);
+  padding: 10px 12px;
+  margin: 0 0 10px;
+}
+
+.section-card h2 {
+  margin: 0 0 8px;
+}
+
+.section-card pre {
+  margin: 0;
+}
+
+.rule-list {
+  margin: 0 0 10px;
+  padding-left: 16px;
+  color: #b7d4ea;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.9rem;
+}
+
 .flat-list {
   list-style: none;
   margin: 0;
@@ -278,6 +310,127 @@ button:disabled {
   color: #dff0fc;
 }
 
+.architecture-config-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.architecture-config-mode {
+  display: flex;
+  gap: 8px;
+}
+
+.architecture-config-mode button {
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  border-radius: 8px;
+}
+
+.architecture-config-mode .is-active {
+  border-color: #ffd179;
+  color: #ffe6b6;
+  background: linear-gradient(180deg, #786139, #5c4829);
+}
+
+.architecture-visual-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.architecture-matcher-row {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 8px;
+  align-items: center;
+  color: #c3dced;
+  font-size: 0.86rem;
+}
+
+.architecture-matcher-row input {
+  width: 100%;
+  border: 1px solid rgba(96, 136, 173, 0.55);
+  border-radius: 8px;
+  background: rgba(4, 13, 24, 0.88);
+  color: #d7ebfb;
+  padding: 6px 8px;
+  font-size: 0.82rem;
+}
+
+.architecture-matrix-wrap {
+  overflow-x: auto;
+}
+
+.architecture-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.architecture-matrix th,
+.architecture-matrix td {
+  border: 1px solid rgba(96, 136, 173, 0.4);
+  text-align: center;
+  padding: 4px;
+  color: #d7ebfb;
+}
+
+.architecture-matrix th:first-child {
+  text-align: left;
+  padding-left: 8px;
+}
+
+.architecture-config-panel textarea {
+  width: 100%;
+  border: 1px solid rgba(96, 136, 173, 0.55);
+  border-radius: 8px;
+  background: rgba(4, 13, 24, 0.88);
+  color: #d7ebfb;
+  padding: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  resize: vertical;
+}
+
+.architecture-config-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.quick-action-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.quick-action-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.quick-action-list code {
+  display: inline-block;
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.quick-action-button {
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  border-radius: 8px;
+  width: fit-content;
+}
+
 .tree pre {
   margin: 0;
   border-radius: 10px;
@@ -289,6 +442,18 @@ button:disabled {
   overflow: auto;
   font-size: 0.9rem;
   line-height: 1.4;
+}
+
+.report-pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.right-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .flow-header {
@@ -391,6 +556,10 @@ button:disabled {
 
 .legend-swatch-reexport {
   background: #59ccff;
+}
+
+.legend-swatch-violation {
+  background: #ff6b9a;
 }
 
 .canvas-meta {
