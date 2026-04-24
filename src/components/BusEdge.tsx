@@ -3,6 +3,11 @@ import { BaseEdge, EdgeLabelRenderer, type EdgeProps } from '@xyflow/react'
 type BusEdgeData = {
   busLane?: number
   busCount?: number
+  points?: Array<{ x: number; y: number }>
+  logicalEdgeId?: string
+  logicalEdgeIds?: string[]
+  segmentIds?: string[]
+  highlightedSegmentIds?: string[]
 }
 
 type Point = { x: number; y: number }
@@ -65,30 +70,50 @@ export function BusEdge({
   const count = edgeData.busCount ?? 1
   const laneOffset = (lane - (count - 1) / 2) * 8
 
-  const baseMidX = sourceX + (targetX - sourceX) * 0.5
-  const busX = baseMidX + laneOffset
+  const fallbackMidX = sourceX + (targetX - sourceX) * 0.5 + laneOffset
+  const fallbackPoints = [
+    { x: sourceX, y: sourceY },
+    { x: sourceX + 18, y: sourceY },
+    { x: fallbackMidX, y: sourceY },
+    { x: fallbackMidX, y: targetY },
+    { x: targetX - 18, y: targetY },
+    { x: targetX, y: targetY },
+  ]
+  const points = edgeData.points && edgeData.points.length > 1 ? edgeData.points : fallbackPoints
+  const path = pathWithChamfer(points, 8)
+  const segmentIds = edgeData.segmentIds ?? []
+  const highlightedSegments = new Set(edgeData.highlightedSegmentIds ?? [])
 
-  const sourceLead = sourceX + 18
-  const targetLead = targetX - 18
-
-  const path = pathWithChamfer(
-    [
-      { x: sourceX, y: sourceY },
-      { x: sourceLead, y: sourceY },
-      { x: busX, y: sourceY },
-      { x: busX, y: targetY },
-      { x: targetLead, y: targetY },
-      { x: targetX, y: targetY },
-    ],
-    8,
-  )
-
-  const labelX = busX
-  const labelY = sourceY + (targetY - sourceY) * 0.5
+  const middlePoint = points[Math.floor(points.length / 2)] ?? { x: fallbackMidX, y: sourceY + (targetY - sourceY) * 0.5 }
+  const labelX = middlePoint.x
+  const labelY = middlePoint.y
 
   return (
     <>
       <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} />
+      {segmentIds.length > 0 && highlightedSegments.size > 0
+        ? segmentIds.map((segmentId, index) => {
+            if (!highlightedSegments.has(segmentId)) {
+              return null
+            }
+            const from = points[index]
+            const to = points[index + 1]
+            if (!from || !to) {
+              return null
+            }
+            return (
+              <path
+                key={`${id}:${segmentId}`}
+                d={`M ${from.x} ${from.y} L ${to.x} ${to.y}`}
+                fill="none"
+                stroke={String(style?.stroke ?? '#e8f5ff')}
+                strokeWidth={Math.max(Number(style?.strokeWidth ?? 2), 2.8)}
+                strokeLinecap="round"
+                opacity={0.95}
+              />
+            )
+          })
+        : null}
       {label ? (
         <EdgeLabelRenderer>
           <div

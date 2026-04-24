@@ -192,6 +192,11 @@ button:disabled {
   gap: 8px;
 }
 
+.legend-note {
+  color: #9fbad1;
+  font-size: 0.83rem;
+}
+
 .legend-swatch {
   width: 14px;
   height: 14px;
@@ -204,6 +209,10 @@ button:disabled {
 
 .legend-swatch-export {
   background: #f5b04d;
+}
+
+.legend-swatch-neutral {
+  background: #7ea3bd;
 }
 
 .canvas-meta {
@@ -220,6 +229,23 @@ button:disabled {
   background: rgba(3, 14, 25, 0.9);
 }
 
+.canvas-hover-strip {
+  margin: 8px 0 0;
+  color: #b7d4ea;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.canvas-hover-value {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .react-flow__node-group {
   font-size: 0.78rem;
   font-weight: 700;
@@ -228,6 +254,78 @@ button:disabled {
 
 .react-flow__edge-textbg {
   fill: rgba(6, 20, 35, 0.95);
+}
+
+.folder-block-node {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 12px;
+}
+
+.folder-header {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  right: 12px;
+  color: #e5f2ff;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-bus {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  height: 0;
+  border-top-width: 2px;
+  border-top-style: dashed;
+}
+
+.folder-bus-import {
+  top: 16px;
+  border-top-color: rgba(111, 220, 154, 0.85);
+}
+
+.folder-bus-export {
+  bottom: 16px;
+  border-top-color: rgba(245, 176, 77, 0.85);
+}
+
+.folder-bus-label {
+  position: absolute;
+  top: -14px;
+  right: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #aac8df;
+  background: rgba(3, 14, 25, 0.75);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.folder-boundary-pin {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(210, 232, 248, 0.7);
+  background: rgba(8, 25, 45, 0.95);
+}
+
+.folder-boundary-pin-import {
+  left: -5px;
+  top: 11px;
+  box-shadow: 0 0 0 2px rgba(111, 220, 154, 0.32);
+}
+
+.folder-boundary-pin-export {
+  right: -5px;
+  bottom: 11px;
+  box-shadow: 0 0 0 2px rgba(245, 176, 77, 0.32);
 }
 
 .chip-node {

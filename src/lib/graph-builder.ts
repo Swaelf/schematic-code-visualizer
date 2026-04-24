@@ -4,12 +4,11 @@ import type { DependencyGraph, ScannedProject } from './models'
 const BLOCK_HEADER_HEIGHT = 38
 const FILE_NODE_WIDTH = 240
 const FILE_NODE_HEIGHT = 90
-const FILE_NODE_GAP_X = 16
-const FILE_NODE_GAP_Y = 12
-const BLOCK_PADDING = 14
-const BLOCK_GAP_X = 40
-const BLOCK_GAP_Y = 40
-const BLOCK_COLUMNS = 3
+const FILE_NODE_GAP_X = 24
+const FILE_NODE_GAP_Y = 18
+const BLOCK_PADDING = 18
+const BLOCK_GAP_X = 24
+const BLOCK_GAP_Y = 24
 
 export type GraphBuildMode = 'file-level' | 'inter-block'
 export type RoutingStyle = 'classic' | 'bus'
@@ -80,12 +79,25 @@ function createNodes(
   const nodes: Node[] = []
   const fileNodeToBlock = new Map<string, string>()
   const fileAnalysisByPath = new Map(dependencyGraph.files.map((file) => [file.path, file]))
+  const importCountByBlock = new Map<string, number>()
+  const exportCountByBlock = new Map<string, number>()
+
+  for (const edge of dependencyGraph.edges) {
+    const sourceBlockLabel = getBlockLabel(edge.fromPath, project.rootName)
+    const targetBlockLabel = getBlockLabel(edge.toPath, project.rootName)
+    const sourceBlockId = `block:${sourceBlockLabel}`
+    const targetBlockId = `block:${targetBlockLabel}`
+    exportCountByBlock.set(sourceBlockId, (exportCountByBlock.get(sourceBlockId) ?? 0) + 1)
+    importCountByBlock.set(targetBlockId, (importCountByBlock.get(targetBlockId) ?? 0) + 1)
+  }
+
+  const blockColumns = Math.max(1, Math.ceil(Math.sqrt(blocks.length)))
 
   blocks.forEach((block, blockIndex) => {
-    const col = blockIndex % BLOCK_COLUMNS
-    const row = Math.floor(blockIndex / BLOCK_COLUMNS)
+    const col = blockIndex % blockColumns
+    const row = Math.floor(blockIndex / blockColumns)
     const files = [...block.files].sort((a, b) => a.localeCompare(b))
-    const filesPerRow = 2
+    const filesPerRow = Math.max(1, Math.min(3, Math.ceil(Math.sqrt(files.length))))
     const rowCount = Math.ceil(files.length / filesPerRow)
     const blockWidth = BLOCK_PADDING * 2 + filesPerRow * FILE_NODE_WIDTH + (filesPerRow - 1) * FILE_NODE_GAP_X
     const blockHeight =
@@ -96,12 +108,16 @@ function createNodes(
 
     const blockNode: Node = {
       id: block.id,
-      type: 'group',
+      type: 'folderBlock',
       position: {
         x: col * (blockWidth + BLOCK_GAP_X),
         y: row * (blockHeight + BLOCK_GAP_Y),
       },
-      data: { label: `${block.label} (${files.length})` },
+      data: {
+        label: `${block.label} (${files.length})`,
+        importCount: importCountByBlock.get(block.id) ?? 0,
+        exportCount: exportCountByBlock.get(block.id) ?? 0,
+      },
       style: {
         width: blockWidth,
         height: blockHeight,
@@ -190,10 +206,10 @@ function createFileEdges(
       source: `file:${edge.fromPath}`,
       target: `file:${edge.toPath}`,
       animated: false,
-      markerEnd: { type: 'arrowclosed', color: '#f5b04d' },
+      markerEnd: { type: 'arrowclosed', color: '#7ea3bd' },
       style: cycleEdgeKeys.has(`${edge.fromPath}->${edge.toPath}`) && highlightCycles
         ? { stroke: '#ff9898', strokeWidth: 2.4 }
-        : { stroke: '#6fdc9a', strokeWidth: 1.6 },
+        : { stroke: '#7ea3bd', strokeWidth: 1.4 },
       data: routingStyle === 'bus' ? { busLane: lane, busCount: countByBus.get(busKey) ?? 1 } : undefined,
     }
   })
@@ -239,11 +255,11 @@ function createInterBlockEdges(
     source: item.source,
     target: item.target,
     label: String(item.count),
-    markerEnd: { type: 'arrowclosed', color: '#f5b04d' },
+    markerEnd: { type: 'arrowclosed', color: '#7ea3bd' },
     style: cycleEdgeKeys.has(`${item.source}->${item.target}`) && highlightCycles
       ? { stroke: '#ff9898', strokeWidth: Math.min(3 + item.count * 0.2, 7) }
-      : { stroke: '#6fdc9a', strokeWidth: Math.min(2 + item.count * 0.15, 6) },
-    labelStyle: { fill: '#b9f7cf', fontSize: 12, fontWeight: 600 },
+      : { stroke: '#7ea3bd', strokeWidth: Math.min(2 + item.count * 0.15, 6) },
+    labelStyle: { fill: '#c8d8e8', fontSize: 12, fontWeight: 600 },
     data: routingStyle === 'bus' ? { busLane: index % 3, busCount: 3 } : undefined,
   }))
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Background, Controls, MiniMap, ReactFlow, type Edge, type NodeMouseHandler } from '@xyflow/react'
 import { BusEdge } from './components/BusEdge'
 import { ChipFileNode } from './components/ChipFileNode'
+import { FolderBlockNode } from './components/FolderBlockNode'
 import { analyzeProjectDependenciesInWorker } from './lib/analyzer-worker-client'
 import { applyElkToBlockNodes } from './lib/elk-layout'
 import { buildDependencyFlowGraph, type GraphBuildMode, type RoutingStyle } from './lib/graph-builder'
@@ -13,6 +14,7 @@ import './App.css'
 import '@xyflow/react/dist/style.css'
 
 type AppTab = 'overview' | 'board' | 'dependencies' | 'diagnostics'
+type BusDisplayMode = 'detailed' | 'trunk-only'
 
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('overview')
@@ -20,6 +22,7 @@ function App() {
   const [dependencyGraph, setDependencyGraph] = useState<DependencyGraph | null>(null)
   const [graphMode, setGraphMode] = useState<GraphBuildMode>('file-level')
   const [routingStyle, setRoutingStyle] = useState<RoutingStyle>('classic')
+  const [busDisplayMode, setBusDisplayMode] = useState<BusDisplayMode>('detailed')
   const [highlightCycles, setHighlightCycles] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [directionFilter, setDirectionFilter] = useState<'all' | 'incoming' | 'outgoing'>('all')
@@ -32,7 +35,7 @@ function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const treeLines = useMemo(() => buildTreeLines(scanResult?.tree ?? null), [scanResult])
-  const nodeTypes = useMemo(() => ({ chipFile: ChipFileNode }), [])
+  const nodeTypes = useMemo(() => ({ chipFile: ChipFileNode, folderBlock: FolderBlockNode }), [])
   const edgeTypes = useMemo(() => ({ bus: BusEdge }), [])
 
   const isPickerAvailable = typeof window !== 'undefined' && 'showDirectoryPicker' in window
@@ -138,42 +141,6 @@ function App() {
     return filteredByCollapse.filter((edge) => edge.source === selectedNodeId || edge.target === selectedNodeId)
   }, [flowGraph, hiddenNodeIds, selectedNodeId, directionFilter])
 
-  const displayEdges = useMemo<Edge[]>(() => {
-    if (!selectedNodeId) {
-      return visibleEdges
-    }
-
-    return visibleEdges.map((edge) => {
-      const isIncoming = edge.target === selectedNodeId
-      const isOutgoing = edge.source === selectedNodeId
-      if (!isIncoming && !isOutgoing) {
-        return edge
-      }
-
-      let color = '#6fdc9a'
-      if (isOutgoing && !isIncoming) {
-        color = '#f5b04d'
-      } else if (isIncoming && !isOutgoing) {
-        color = '#6fdc9a'
-      } else {
-        color = '#ffe79f'
-      }
-
-      return {
-        ...edge,
-        style: {
-          ...(edge.style ?? {}),
-          stroke: color,
-          strokeWidth: Math.max(Number(edge.style?.strokeWidth ?? 0), 2),
-        },
-        markerEnd:
-          edge.markerEnd && typeof edge.markerEnd === 'object'
-            ? { ...edge.markerEnd, color }
-            : { type: 'arrowclosed' as const, color },
-      }
-    })
-  }, [visibleEdges, selectedNodeId])
-
   const connectedNodeIds = useMemo(() => {
     const ids = new Set<string>()
     if (!selectedNodeId) {
@@ -194,39 +161,39 @@ function App() {
     return layoutedNodes
       .filter((node) => !hiddenNodeIds.has(node.id))
       .map((node) => {
-      const isSelected = node.id === selectedNodeId
-      const isConnected = connectedNodeIds.has(node.id)
-      const isFileNode = node.id.startsWith('file:')
-      const isMatch = matchingFileNodeIds.has(node.id)
-      const isBlockWithMatch = blockIdsWithMatches.has(node.id)
-      const nextStyle = {
-        ...(node.style ?? {}),
-        opacity: 1,
-      }
-      if (selectedNodeId) {
-        nextStyle.opacity = isConnected ? 1 : 0.32
-      }
-      if (normalizedSearchQuery) {
-        if (isFileNode && !isMatch) {
-          nextStyle.opacity = Math.min(nextStyle.opacity, 0.2)
+        const isSelected = node.id === selectedNodeId
+        const isConnected = connectedNodeIds.has(node.id)
+        const isFileNode = node.id.startsWith('file:')
+        const isMatch = matchingFileNodeIds.has(node.id)
+        const isBlockWithMatch = blockIdsWithMatches.has(node.id)
+        const nextStyle = {
+          ...(node.style ?? {}),
+          opacity: 1,
         }
-        if (!isFileNode && !isBlockWithMatch) {
-          nextStyle.opacity = Math.min(nextStyle.opacity, 0.3)
+        if (selectedNodeId) {
+          nextStyle.opacity = isConnected ? 1 : 0.32
         }
-      }
-      if (isSelected) {
-        nextStyle.border = '2px solid #ffe79f'
-      }
-      if (normalizedSearchQuery && isMatch) {
-        nextStyle.boxShadow = '0 0 0 2px rgba(255, 231, 159, 0.55)'
-      } else {
-        nextStyle.boxShadow = 'none'
-      }
-      return {
-        ...node,
-        style: nextStyle,
-      }
-    })
+        if (normalizedSearchQuery) {
+          if (isFileNode && !isMatch) {
+            nextStyle.opacity = Math.min(nextStyle.opacity, 0.2)
+          }
+          if (!isFileNode && !isBlockWithMatch) {
+            nextStyle.opacity = Math.min(nextStyle.opacity, 0.3)
+          }
+        }
+        if (isSelected) {
+          nextStyle.border = '2px solid #ffe79f'
+        }
+        if (normalizedSearchQuery && isMatch) {
+          nextStyle.boxShadow = '0 0 0 2px rgba(255, 231, 159, 0.55)'
+        } else {
+          nextStyle.boxShadow = 'none'
+        }
+        return {
+          ...node,
+          style: nextStyle,
+        }
+      })
   }, [
     flowGraph,
     layoutedNodes,
@@ -237,6 +204,308 @@ function App() {
     matchingFileNodeIds,
     blockIdsWithMatches,
   ])
+
+  const displayEdges = useMemo<Edge[]>(() => {
+    const nodeById = new Map(visibleNodes.map((node) => [node.id, node]))
+    const absoluteRectById = new Map<string, { x: number; y: number; width: number; height: number }>()
+    const segmentLogicalIds = new Map<string, Set<string>>()
+
+    for (const node of visibleNodes) {
+      const width = Number(node.style?.width ?? 0)
+      const height = Number(node.style?.height ?? 0)
+      if (node.parentId) {
+        const parent = nodeById.get(node.parentId)
+        if (parent) {
+          const parentWidth = Number(parent.style?.width ?? 0)
+          const parentHeight = Number(parent.style?.height ?? 0)
+          absoluteRectById.set(node.parentId, {
+            x: parent.position.x,
+            y: parent.position.y,
+            width: parentWidth,
+            height: parentHeight,
+          })
+          absoluteRectById.set(node.id, {
+            x: parent.position.x + node.position.x,
+            y: parent.position.y + node.position.y,
+            width,
+            height,
+          })
+          continue
+        }
+      }
+      absoluteRectById.set(node.id, { x: node.position.x, y: node.position.y, width, height })
+    }
+
+    const blockPairKey = (sourceBlockId: string, targetBlockId: string) => `${sourceBlockId}->${targetBlockId}`
+    const laneInfoByEdgeId = new Map<string, { lane: number; laneCount: number; pairKey: string }>()
+    const pairMetaByKey = new Map<string, { count: number; primaryEdgeId: string }>()
+    const logicalEdgeIdsByPair = new Map<string, string[]>()
+    const compactTrunkMode = routingStyle === 'bus' && busDisplayMode === 'trunk-only'
+    const roundPoint = (value: number) => Math.round(value * 10) / 10
+    const segmentIdFromPoints = (
+      sourceBlockId: string,
+      targetBlockId: string,
+      pairKey: string,
+      from: { x: number; y: number },
+      to: { x: number; y: number },
+    ) =>
+      [
+        'seg',
+        sourceBlockId,
+        targetBlockId,
+        pairKey,
+        `${roundPoint(from.x)}:${roundPoint(from.y)}`,
+        `${roundPoint(to.x)}:${roundPoint(to.y)}`,
+      ].join('|')
+
+    const aggregationPairKey = (edge: Edge, sourceBlockId: string, targetBlockId: string) => {
+      const baseKey = blockPairKey(sourceBlockId, targetBlockId)
+      if (!compactTrunkMode || !selectedNodeId || sourceBlockId !== targetBlockId) {
+        return baseKey
+      }
+      const isOutgoing = edge.source === selectedNodeId
+      const isIncoming = edge.target === selectedNodeId
+      if (isOutgoing && !isIncoming) {
+        return `${baseKey}|out`
+      }
+      if (isIncoming && !isOutgoing) {
+        return `${baseKey}|in`
+      }
+      return `${baseKey}|self`
+    }
+
+    if (routingStyle === 'bus') {
+      const edgeIdsByPair = new Map<string, string[]>()
+      for (const edge of visibleEdges) {
+        if (!edge.source.startsWith('file:') || !edge.target.startsWith('file:')) {
+          continue
+        }
+        const sourceBlockId = fileNodeToBlockId.get(edge.source) ?? edge.source
+        const targetBlockId = fileNodeToBlockId.get(edge.target) ?? edge.target
+        const key = aggregationPairKey(edge, sourceBlockId, targetBlockId)
+        const existing = edgeIdsByPair.get(key)
+        if (existing) {
+          existing.push(edge.id)
+        } else {
+          edgeIdsByPair.set(key, [edge.id])
+        }
+      }
+      for (const [pairKey, edgeIds] of edgeIdsByPair.entries()) {
+        edgeIds.sort((left, right) => left.localeCompare(right))
+        const laneCount = edgeIds.length
+        logicalEdgeIdsByPair.set(pairKey, [...edgeIds])
+        pairMetaByKey.set(pairKey, { count: laneCount, primaryEdgeId: edgeIds[0] })
+        edgeIds.forEach((edgeId, lane) => {
+          laneInfoByEdgeId.set(edgeId, { lane, laneCount, pairKey })
+        })
+      }
+    }
+
+    const createBusPoints = (edge: Edge) => {
+      if (routingStyle !== 'bus' || !edge.source.startsWith('file:') || !edge.target.startsWith('file:')) {
+        return null
+      }
+
+      const sourceBlockId = fileNodeToBlockId.get(edge.source) ?? edge.source
+      const targetBlockId = fileNodeToBlockId.get(edge.target) ?? edge.target
+      const sourceRect = absoluteRectById.get(edge.source)
+      const targetRect = absoluteRectById.get(edge.target)
+      const sourceBlockRect = absoluteRectById.get(sourceBlockId)
+      const targetBlockRect = absoluteRectById.get(targetBlockId)
+
+      if (!sourceRect || !targetRect || !sourceBlockRect || !targetBlockRect) {
+        return null
+      }
+
+      const laneInfo = laneInfoByEdgeId.get(edge.id)
+      const lane = laneInfo?.lane ?? 0
+      const laneCount = laneInfo?.laneCount ?? 1
+      const pairKey = laneInfo?.pairKey ?? blockPairKey(sourceBlockId, targetBlockId)
+      const pairMeta = pairMetaByKey.get(pairKey)
+      const laneShift = (lane - (laneCount - 1) / 2) * 7
+      const laneShiftForGeometry = compactTrunkMode ? 0 : laneShift
+      const isPairPrimary = pairMeta?.primaryEdgeId === edge.id
+      const logicalEdgeIds = logicalEdgeIdsByPair.get(pairKey) ?? [edge.id]
+
+      const sourcePoint = { x: sourceRect.x + sourceRect.width, y: sourceRect.y + sourceRect.height / 2 }
+      const targetPoint = { x: targetRect.x, y: targetRect.y + targetRect.height / 2 }
+      const sourceExportBusY = sourceBlockRect.y + sourceBlockRect.height - 16
+      const targetImportBusY = targetBlockRect.y + 16
+      const sourceBoundaryPin = { x: sourceBlockRect.x + sourceBlockRect.width + 5, y: sourceExportBusY }
+      const targetBoundaryPin = { x: targetBlockRect.x - 5, y: targetImportBusY }
+      const sourceOuterX = sourceBlockRect.x + sourceBlockRect.width + 22 + laneShiftForGeometry
+      const localBridgeX = sourceOuterX
+      const trunkY = sourceExportBusY + (targetImportBusY - sourceExportBusY) * 0.5
+      const sourceTrunkX = sourceBoundaryPin.x + 12
+      const targetTrunkX = targetBoundaryPin.x - 12
+      const sourceBranchX = sourceBoundaryPin.x + 20 + laneShiftForGeometry
+      const targetBranchX = targetBoundaryPin.x - 20 + laneShiftForGeometry
+      const isCrossFolder = sourceBlockId !== targetBlockId
+
+      const points =
+        !isCrossFolder
+          ? [
+              sourcePoint,
+              { x: sourcePoint.x + 8, y: sourcePoint.y },
+              { x: sourcePoint.x + 8, y: sourceExportBusY },
+              { x: localBridgeX, y: sourceExportBusY },
+              { x: localBridgeX, y: targetImportBusY },
+              { x: targetPoint.x - 8, y: targetImportBusY },
+              { x: targetPoint.x - 8, y: targetPoint.y },
+              targetPoint,
+            ]
+          : compactTrunkMode
+            ? [
+                sourcePoint,
+                { x: sourcePoint.x + 8, y: sourcePoint.y },
+                { x: sourcePoint.x + 8, y: sourceExportBusY },
+                { x: sourceBoundaryPin.x, y: sourceExportBusY },
+                { x: sourceTrunkX, y: sourceExportBusY },
+                { x: sourceTrunkX, y: trunkY },
+                { x: targetTrunkX, y: trunkY },
+                { x: targetTrunkX, y: targetImportBusY },
+                { x: targetBoundaryPin.x, y: targetImportBusY },
+                { x: targetPoint.x - 8, y: targetImportBusY },
+                { x: targetPoint.x - 8, y: targetPoint.y },
+                targetPoint,
+              ]
+          : [
+              sourcePoint,
+              { x: sourcePoint.x + 8, y: sourcePoint.y },
+              { x: sourcePoint.x + 8, y: sourceExportBusY },
+              { x: sourceBoundaryPin.x, y: sourceExportBusY },
+              { x: sourceBranchX, y: sourceExportBusY },
+              { x: sourceBranchX, y: trunkY },
+              { x: sourceTrunkX, y: trunkY },
+              { x: targetTrunkX, y: trunkY },
+              { x: targetBranchX, y: trunkY },
+              { x: targetBranchX, y: targetImportBusY },
+              { x: targetBoundaryPin.x, y: targetImportBusY },
+              { x: targetPoint.x - 8, y: targetImportBusY },
+              { x: targetPoint.x - 8, y: targetPoint.y },
+              targetPoint,
+            ]
+
+      return { points, lane, laneCount, pairKey, pairMeta, isCrossFolder, isPairPrimary, logicalEdgeIds }
+    }
+
+    const selectedLogicalEdgeIds = selectedNodeId ? new Set(visibleEdges.map((edge) => edge.id)) : new Set<string>()
+
+    const preparedEdges: Edge[] = []
+    for (const edge of visibleEdges) {
+      const isIncoming = selectedNodeId ? edge.target === selectedNodeId : false
+      const isOutgoing = selectedNodeId ? edge.source === selectedNodeId : false
+      const isConnected = isIncoming || isOutgoing
+
+      let color = '#7ea3bd'
+      let strokeWidth = Math.max(Number(edge.style?.strokeWidth ?? 0), 1.4)
+
+      if (selectedNodeId && isConnected) {
+        if (isOutgoing && !isIncoming) {
+          color = '#f5b04d'
+        } else if (isIncoming && !isOutgoing) {
+          color = '#6fdc9a'
+        } else {
+          color = '#ffe79f'
+        }
+        strokeWidth = Math.max(strokeWidth, 2)
+      } else if (String(edge.style?.stroke ?? '').startsWith('#ff')) {
+        color = String(edge.style?.stroke)
+      }
+
+      const baseEdge: Edge = {
+        ...edge,
+        type: routingStyle === 'bus' ? 'bus' : edge.type,
+        style: {
+          ...(edge.style ?? {}),
+          stroke: color,
+          strokeWidth,
+        },
+        markerEnd:
+          edge.markerEnd && typeof edge.markerEnd === 'object'
+            ? { ...edge.markerEnd, color }
+            : { type: 'arrowclosed' as const, color },
+      }
+
+      const bus = createBusPoints(edge)
+      if (!bus) {
+        preparedEdges.push(baseEdge)
+        continue
+      }
+
+      if (compactTrunkMode && (bus.pairMeta?.count ?? 1) > 1 && !bus.isPairPrimary) {
+        continue
+      }
+
+      const sourceBlockId = fileNodeToBlockId.get(edge.source) ?? edge.source
+      const targetBlockId = fileNodeToBlockId.get(edge.target) ?? edge.target
+      const segmentIds: string[] = []
+      for (let index = 0; index < bus.points.length - 1; index += 1) {
+        const from = bus.points[index]
+        const to = bus.points[index + 1]
+        const segmentId = segmentIdFromPoints(sourceBlockId, targetBlockId, bus.pairKey, from, to)
+        segmentIds.push(segmentId)
+        const existing = segmentLogicalIds.get(segmentId)
+        const logicalEdgeIds = bus.logicalEdgeIds
+        if (existing) {
+          for (const logicalEdgeId of logicalEdgeIds) {
+            existing.add(logicalEdgeId)
+          }
+        } else {
+          segmentLogicalIds.set(segmentId, new Set(logicalEdgeIds))
+        }
+      }
+
+      const aggregateCountLabel = bus.isCrossFolder && bus.isPairPrimary && (bus.pairMeta?.count ?? 1) > 1
+        ? String(bus.pairMeta?.count ?? '')
+        : undefined
+
+      preparedEdges.push({
+        ...baseEdge,
+        label: aggregateCountLabel ?? baseEdge.label,
+        data: {
+          ...(baseEdge.data ?? {}),
+          logicalEdgeId: edge.id,
+          logicalEdgeIds: bus.logicalEdgeIds,
+          segmentIds,
+          points: bus.points,
+          busLane: bus.lane,
+          busCount: bus.laneCount,
+          isPairPrimary: bus.isPairPrimary,
+          pairKey: bus.pairKey,
+          pairCount: bus.pairMeta?.count ?? 1,
+        },
+      })
+    }
+
+    if (!selectedNodeId || routingStyle !== 'bus') {
+      return preparedEdges
+    }
+
+    return preparedEdges.map((edge) => {
+      const segmentIds = Array.isArray(edge.data?.segmentIds) ? (edge.data.segmentIds as string[]) : []
+      const highlightedSegmentIds = segmentIds.filter((segmentId) => {
+        const logicalIds = segmentLogicalIds.get(segmentId)
+        if (!logicalIds) {
+          return false
+        }
+        for (const logicalId of logicalIds) {
+          if (selectedLogicalEdgeIds.has(logicalId)) {
+            return true
+          }
+        }
+        return false
+      })
+      return {
+        ...edge,
+        data: {
+          ...(edge.data ?? {}),
+          highlightedSegmentIds,
+        },
+      }
+    })
+  }, [visibleEdges, visibleNodes, fileNodeToBlockId, flowGraph, hiddenNodeIds, routingStyle, busDisplayMode, selectedNodeId])
+
 
   useEffect(() => {
     let isCancelled = false
@@ -250,7 +519,11 @@ function App() {
       setLayoutedNodes(flowGraph.nodes)
       setIsLayouting(true)
       try {
-        const nextNodes = await applyElkToBlockNodes(flowGraph.nodes, flowGraph.blockLayoutEdges)
+        const nextNodes = await applyElkToBlockNodes(
+          flowGraph.nodes,
+          flowGraph.blockLayoutEdges,
+          graphMode === 'file-level' ? 'compact' : 'dependency',
+        )
         if (!isCancelled) {
           setLayoutedNodes(nextNodes)
         }
@@ -360,6 +633,11 @@ function App() {
   }, [selectedNodeId, fileNodeToBlockId])
 
   const hoveredFileAnalysis = hoveredFilePath ? fileAnalysisByPath.get(hoveredFilePath) : null
+  const hoverInfoLine = hoveredFileAnalysis
+    ? `${hoveredFilePath ?? '-'} | Exports: ${
+        hoveredFileAnalysis.exports.length > 0 ? hoveredFileAnalysis.exports.join(', ') : 'none'
+      }`
+    : (hoveredFilePath ?? '-')
 
   function toggleSelectedBlockCollapse() {
     if (!selectedBlockId || graphMode !== 'file-level') {
@@ -559,6 +837,17 @@ function App() {
                 <option value="bus">bus</option>
               </select>
             </label>
+            <label className="toggle-row">
+              Bus view
+              <select
+                value={busDisplayMode}
+                onChange={(event) => setBusDisplayMode(event.target.value as BusDisplayMode)}
+                disabled={routingStyle !== 'bus'}
+              >
+                <option value="detailed">detailed</option>
+                <option value="trunk-only">trunk-only</option>
+              </select>
+            </label>
             <label className="toggle-row search-row">
               Search file
               <input
@@ -582,18 +871,32 @@ function App() {
             >
               Expand all blocks
             </button>
-            <button type="button" onClick={() => setSelectedNodeId(null)} disabled={!selectedNodeId}>
-              Clear selection
-            </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedNodeId(null)
+              setDirectionFilter('all')
+            }}
+            disabled={!selectedNodeId}
+          >
+            Clear selection
+          </button>
           </div>
           <div className="board-legend">
             <span className="legend-item">
+              <span className="legend-swatch legend-swatch-neutral" />
+              Neutral edge
+            </span>
+            <span className="legend-item">
               <span className="legend-swatch legend-swatch-import" />
-              Imports (flow)
+              Incoming (import)
             </span>
             <span className="legend-item">
               <span className="legend-swatch legend-swatch-export" />
-              Exports (arrow/pins)
+              Outgoing (export)
+            </span>
+            <span className="legend-note">
+              Colors are directional when selected; `trunk-only` keeps channels aggregated.
             </span>
           </div>
           {flowGraph ? (
@@ -605,12 +908,6 @@ function App() {
                 {isLayouting ? ' | Layout: running...' : ' | Layout: ELK ready'}
                 {selectedNodeId ? ` | Selected: ${selectedNodeId}` : ''}
               </p>
-              <p className="canvas-meta">
-                Hover: {hoveredFilePath ?? '-'}
-                {hoveredFileAnalysis
-                  ? ` | Exports: ${hoveredFileAnalysis.exports.length > 0 ? hoveredFileAnalysis.exports.join(', ') : 'none'}`
-                  : ''}
-              </p>
               <div className="canvas-shell">
                 <ReactFlow
                   nodes={visibleNodes}
@@ -618,6 +915,10 @@ function App() {
                   nodeTypes={nodeTypes}
                   edgeTypes={edgeTypes}
                   onNodeClick={onNodeClick}
+                  onPaneClick={() => {
+                    setSelectedNodeId(null)
+                    setDirectionFilter('all')
+                  }}
                   onNodeMouseEnter={onNodeMouseEnter}
                   onNodeMouseLeave={onNodeMouseLeave}
                   fitView
@@ -629,6 +930,9 @@ function App() {
                   <Background gap={24} size={1} color="#3a6689" />
                 </ReactFlow>
               </div>
+              <p className="canvas-hover-strip" title={hoverInfoLine}>
+                Hover: <span className="canvas-hover-value">{hoverInfoLine}</span>
+              </p>
             </>
           ) : (
             <p className="canvas-meta">Scan a folder to build and render dependency canvas.</p>
