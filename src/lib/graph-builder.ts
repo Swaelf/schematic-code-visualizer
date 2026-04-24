@@ -1,5 +1,5 @@
-import { Position, type Edge, type Node } from '@xyflow/react'
-import type { DependencyGraph, ScannedProject } from './models'
+import { Position, type Edge, type Node, type XYPosition } from '@xyflow/react'
+import type { DependencyGraph, ScannedProject, TreeNode } from './models'
 
 const BLOCK_HEADER_HEIGHT = 38
 const FILE_NODE_WIDTH = 240
@@ -7,8 +7,10 @@ const FILE_NODE_HEIGHT = 90
 const FILE_NODE_GAP_X = 24
 const FILE_NODE_GAP_Y = 18
 const BLOCK_PADDING = 18
+const BLOCK_CONTENT_BOTTOM_PADDING = 26
 const BLOCK_GAP_X = 24
 const BLOCK_GAP_Y = 24
+const BLOCK_COLUMNS = 3
 
 export type GraphBuildMode = 'file-level' | 'inter-block'
 export type RoutingStyle = 'classic' | 'bus'
@@ -19,12 +21,6 @@ export type BuiltGraph = {
   blockCount: number
   blockLayoutEdges: Array<{ source: string; target: string }>
   cycleEdgeCount: number
-}
-
-type BlockInfo = {
-  id: string
-  label: string
-  files: string[]
 }
 
 type GraphOptions = {
@@ -38,6 +34,31 @@ type ConnectionItem = {
   count: number
 }
 
+type TopLevelBlockInfo = {
+  id: string
+  label: string
+  files: string[]
+}
+
+type FolderInfo = {
+  id: string
+  label: string
+  relativePath: string
+  parentId?: string
+  childFolderIds: string[]
+  filePaths: string[]
+}
+
+type FolderLayout = {
+  width: number
+  height: number
+  itemPositions: Map<string, XYPosition>
+}
+
+function toFolderId(relativeDirectoryPath: string) {
+  return relativeDirectoryPath ? `block:${relativeDirectoryPath}` : 'block:(root)'
+}
+
 function getRelativePath(path: string, rootName: string) {
   const prefix = `${rootName}/`
   if (path.startsWith(prefix)) {
@@ -46,17 +67,23 @@ function getRelativePath(path: string, rootName: string) {
   return path
 }
 
-function getBlockLabel(path: string, rootName: string) {
+function getRelativeDirectoryPath(path: string, rootName: string) {
+  const relativePath = getRelativePath(path, rootName)
+  const lastSlashIndex = relativePath.lastIndexOf('/')
+  return lastSlashIndex >= 0 ? relativePath.slice(0, lastSlashIndex) : ''
+}
+
+function getTopLevelBlockLabel(path: string, rootName: string) {
   const relativePath = getRelativePath(path, rootName)
   const [firstSegment] = relativePath.split('/')
   return firstSegment || '(root)'
 }
 
-function createBlocks(project: ScannedProject) {
-  const blockMap = new Map<string, BlockInfo>()
+function createTopLevelBlocks(project: ScannedProject) {
+  const blockMap = new Map<string, TopLevelBlockInfo>()
 
   for (const file of project.files) {
-    const label = getBlockLabel(file.path, project.rootName)
+    const label = getTopLevelBlockLabel(file.path, project.rootName)
     const id = `block:${label}`
     const existing = blockMap.get(id)
     if (existing) {
@@ -69,8 +96,325 @@ function createBlocks(project: ScannedProject) {
   return [...blockMap.values()].sort((left, right) => left.label.localeCompare(right.label))
 }
 
-function createNodes(
-  blocks: BlockInfo[],
+function packItems(
+  items: Array<{ id: string; width: number; height: number }>,
+  gapX: number,
+  gapY: number,
+) {
+  const positions = new Map<string, XYPosition>()
+  if (items.length === 0) {
+    return { positions, contentWidth: 180, contentHeight: 40 }
+  }
+
+  const totalArea = items.reduce((sum, item) => sum + (item.width + gapX) * (item.height + gapY), 0)
+  const maxWidth = items.reduce((max, item) => Math.max(max, item.width), 0)
+  const targetRowWidth = Math.max(maxWidth, Math.sqrt(totalArea) * 1.08)
+
+  let x = 0
+  let y = 0
+  let rowHeight = 0
+  let contentWidth = 0
+
+  for (const item of items) {
+    const shouldWrap = x > 0 && x + item.width > targetRowWidth
+    if (shouldWrap) {
+      x = 0
+      y += rowHeight + gapY
+      rowHeight = 0
+    }
+
+    positions.set(item.id, { x, y })
+    x += item.width + gapX
+    rowHeight = Math.max(rowHeight, item.height)
+    contentWidth = Math.max(contentWidth, x - gapX)
+  }
+
+  const contentHeight = y + rowHeight
+  return { positions, contentWidth, contentHeight }
+}
+
+function collectHierarchicalFolders(project: ScannedProject) {
+  const folderById = new Map<string, FolderInfo>()
+  const filePathsByRelativeDir = new Map<string, string[]>()
+
+  for (const file of project.files) {
+    const relativeDirectoryPath = getRelativeDirectoryPath(file.path, project.rootName)
+    const existing = filePathsByRelativeDir.get(relativeDirectoryPath)
+    if (existing) {
+      existing.push(file.path)
+    } else {
+      filePathsByRelativeDir.set(relativeDirectoryPath, [file.path])
+    }
+  }
+
+  function walk(node: TreeNode, parentRelativePath: string | null) {
+    if (node.type !== 'directory') {
+      return
+    }
+    const currentRelativePath = getRelativePath(node.path, project.rootName)
+    const isRoot = currentRelativePath === ''
+
+    if (!isRoot) {
+      const id = toFolderId(currentRelativePath)
+      const parentId = parentRelativePath ? toFolderId(parentRelativePath) : undefined
+      folderById.set(id, {
+        id,
+        label: node.name,
+        relativePath: currentRelativePath,
+        parentId,
+        childFolderIds: [],
+        filePaths: [],
+      })
+      if (parentId) {
+        const parent = folderById.get(parentId)
+        if (parent) {
+          parent.childFolderIds.push(id)
+        }
+      }
+    }
+
+    for (const child of node.children ?? []) {
+      if (child.type === 'directory') {
+        walk(child, isRoot ? '' : currentRelativePath)
+      }
+    }
+  }
+
+  walk(project.tree, null)
+
+  for (const folder of folderById.values()) {
+    folder.filePaths = [...(filePathsByRelativeDir.get(folder.relativePath) ?? [])].sort((a, b) => a.localeCompare(b))
+    folder.childFolderIds.sort((a, b) => {
+      const left = folderById.get(a)?.label ?? a
+      const right = folderById.get(b)?.label ?? b
+      return left.localeCompare(right)
+    })
+  }
+
+  if ((filePathsByRelativeDir.get('') ?? []).length > 0) {
+    const rootFolderId = toFolderId('')
+    folderById.set(rootFolderId, {
+      id: rootFolderId,
+      label: '(root)',
+      relativePath: '',
+      parentId: undefined,
+      childFolderIds: [],
+      filePaths: [...(filePathsByRelativeDir.get('') ?? [])].sort((a, b) => a.localeCompare(b)),
+    })
+  }
+
+  const topLevelFolderIds = [...folderById.values()]
+    .filter((folder) => !folder.parentId)
+    .map((folder) => folder.id)
+    .sort((left, right) => {
+      const leftLabel = folderById.get(left)?.label ?? left
+      const rightLabel = folderById.get(right)?.label ?? right
+      return leftLabel.localeCompare(rightLabel)
+    })
+
+  return { folderById, topLevelFolderIds }
+}
+
+function createHierarchicalFileLevelNodes(
+  project: ScannedProject,
+  dependencyGraph: DependencyGraph,
+  cycleFileNodeIds: Set<string>,
+  cycleFolderNodeIds: Set<string>,
+) {
+  const { folderById, topLevelFolderIds } = collectHierarchicalFolders(project)
+  const fileAnalysisByPath = new Map(dependencyGraph.files.map((file) => [file.path, file]))
+  const parentByFolderId = new Map<string, string>()
+  for (const folder of folderById.values()) {
+    if (folder.parentId) {
+      parentByFolderId.set(folder.id, folder.parentId)
+    }
+  }
+
+  const fileNodeToBlock = new Map<string, string>()
+  for (const folder of folderById.values()) {
+    for (const filePath of folder.filePaths) {
+      fileNodeToBlock.set(`file:${filePath}`, folder.id)
+    }
+  }
+
+  const importCountByFolder = new Map<string, number>()
+  const exportCountByFolder = new Map<string, number>()
+  function incrementAncestors(map: Map<string, number>, folderId: string | undefined) {
+    let current = folderId
+    while (current) {
+      map.set(current, (map.get(current) ?? 0) + 1)
+      current = parentByFolderId.get(current)
+    }
+  }
+  for (const edge of dependencyGraph.edges) {
+    const sourceFolderId = fileNodeToBlock.get(`file:${edge.fromPath}`)
+    const targetFolderId = fileNodeToBlock.get(`file:${edge.toPath}`)
+    incrementAncestors(exportCountByFolder, sourceFolderId)
+    incrementAncestors(importCountByFolder, targetFolderId)
+  }
+
+  const layoutByFolderId = new Map<string, FolderLayout>()
+  function computeFolderLayout(folderId: string): FolderLayout {
+    const existing = layoutByFolderId.get(folderId)
+    if (existing) {
+      return existing
+    }
+    const folder = folderById.get(folderId)
+    if (!folder) {
+      const fallback: FolderLayout = {
+        width: FILE_NODE_WIDTH + BLOCK_PADDING * 2,
+        height: FILE_NODE_HEIGHT + BLOCK_PADDING * 2 + BLOCK_HEADER_HEIGHT + BLOCK_CONTENT_BOTTOM_PADDING,
+        itemPositions: new Map(),
+      }
+      layoutByFolderId.set(folderId, fallback)
+      return fallback
+    }
+
+    const folderItems = folder.childFolderIds.map((childFolderId) => {
+      const childLayout = computeFolderLayout(childFolderId)
+      return { id: childFolderId, width: childLayout.width, height: childLayout.height }
+    })
+    const fileItems = folder.filePaths.map((filePath) => ({
+      id: `file:${filePath}`,
+      width: FILE_NODE_WIDTH,
+      height: FILE_NODE_HEIGHT,
+    }))
+    const items = [...folderItems, ...fileItems]
+    const packed = packItems(items, FILE_NODE_GAP_X, FILE_NODE_GAP_Y)
+
+    const width = Math.max(300, BLOCK_PADDING * 2 + packed.contentWidth)
+    const contentTop = BLOCK_PADDING + BLOCK_HEADER_HEIGHT
+    const height = Math.max(
+      180,
+      contentTop + packed.contentHeight + BLOCK_PADDING + BLOCK_CONTENT_BOTTOM_PADDING,
+    )
+
+    const layout: FolderLayout = {
+      width,
+      height,
+      itemPositions: packed.positions,
+    }
+    layoutByFolderId.set(folderId, layout)
+    return layout
+  }
+
+  for (const folderId of folderById.keys()) {
+    computeFolderLayout(folderId)
+  }
+
+  const topItems = topLevelFolderIds.map((folderId) => {
+    const layout = layoutByFolderId.get(folderId)
+    return {
+      id: folderId,
+      width: layout?.width ?? 300,
+      height: layout?.height ?? 180,
+    }
+  })
+  const topPacked = packItems(topItems, BLOCK_GAP_X, BLOCK_GAP_Y)
+  const topLevelPositionById = topPacked.positions
+
+  const nodes: Node[] = []
+
+  function pushFolder(folderId: string, parentId: string | undefined, position: XYPosition) {
+    const folder = folderById.get(folderId)
+    const layout = layoutByFolderId.get(folderId)
+    if (!folder || !layout) {
+      return
+    }
+
+    const node: Node = {
+      id: folder.id,
+      type: 'folderBlock',
+      position,
+      parentId,
+      extent: parentId ? 'parent' : undefined,
+      data: {
+        label: `${folder.label} (${folder.filePaths.length + folder.childFolderIds.length})`,
+        importCount: importCountByFolder.get(folder.id) ?? 0,
+        exportCount: exportCountByFolder.get(folder.id) ?? 0,
+      },
+      style: {
+        width: layout.width,
+        height: layout.height,
+        borderRadius: 12,
+        border: cycleFolderNodeIds.has(folder.id) ? '2px solid #ff8f8f' : '1px solid #5f90b7',
+        background: 'rgba(8, 32, 54, 0.78)',
+      },
+    }
+    nodes.push(node)
+
+    const contentOffsetY = BLOCK_PADDING + BLOCK_HEADER_HEIGHT
+    for (const childFolderId of folder.childFolderIds) {
+      const childPosition = layout.itemPositions.get(childFolderId)
+      if (!childPosition) {
+        continue
+      }
+      pushFolder(childFolderId, folder.id, {
+        x: BLOCK_PADDING + childPosition.x,
+        y: contentOffsetY + childPosition.y,
+      })
+    }
+
+    for (const filePath of folder.filePaths) {
+      const fileNodeId = `file:${filePath}`
+      const filePosition = layout.itemPositions.get(fileNodeId)
+      if (!filePosition) {
+        continue
+      }
+      const relativeLabel = getRelativePath(filePath, project.rootName)
+      const fileName = relativeLabel.split('/').at(-1) ?? relativeLabel
+      const analysis = fileAnalysisByPath.get(filePath)
+      nodes.push({
+        id: fileNodeId,
+        type: 'chipFile',
+        parentId: folder.id,
+        extent: 'parent',
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
+        position: {
+          x: BLOCK_PADDING + filePosition.x,
+          y: contentOffsetY + filePosition.y,
+        },
+        data: {
+          label: fileName,
+          path: relativeLabel,
+          importCount: analysis?.imports.length ?? 0,
+          exportCount: analysis?.exports.length ?? 0,
+        },
+        style: {
+          width: FILE_NODE_WIDTH,
+          height: FILE_NODE_HEIGHT,
+          borderRadius: 8,
+          border: cycleFileNodeIds.has(fileNodeId) ? '2px solid #ff8f8f' : '1px solid #78aacb',
+          background: 'rgba(13, 57, 88, 0.85)',
+          color: '#e8f5ff',
+          fontSize: 12,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          textAlign: 'center',
+          padding: '0 8px',
+        },
+      })
+    }
+  }
+
+  for (const folderId of topLevelFolderIds) {
+    const position = topLevelPositionById.get(folderId) ?? { x: 0, y: 0 }
+    pushFolder(folderId, undefined, position)
+  }
+
+  const interBlockConnections = collectInterBlockConnections(dependencyGraph, fileNodeToBlock)
+  return {
+    nodes,
+    fileNodeToBlock,
+    blockCount: folderById.size,
+    blockLayoutEdges: interBlockConnections.map((connection) => ({ source: connection.source, target: connection.target })),
+  }
+}
+
+function createTopLevelFileNodes(
+  blocks: TopLevelBlockInfo[],
   project: ScannedProject,
   dependencyGraph: DependencyGraph,
   cycleFileNodeIds: Set<string>,
@@ -83,19 +427,17 @@ function createNodes(
   const exportCountByBlock = new Map<string, number>()
 
   for (const edge of dependencyGraph.edges) {
-    const sourceBlockLabel = getBlockLabel(edge.fromPath, project.rootName)
-    const targetBlockLabel = getBlockLabel(edge.toPath, project.rootName)
+    const sourceBlockLabel = getTopLevelBlockLabel(edge.fromPath, project.rootName)
+    const targetBlockLabel = getTopLevelBlockLabel(edge.toPath, project.rootName)
     const sourceBlockId = `block:${sourceBlockLabel}`
     const targetBlockId = `block:${targetBlockLabel}`
     exportCountByBlock.set(sourceBlockId, (exportCountByBlock.get(sourceBlockId) ?? 0) + 1)
     importCountByBlock.set(targetBlockId, (importCountByBlock.get(targetBlockId) ?? 0) + 1)
   }
 
-  const blockColumns = Math.max(1, Math.ceil(Math.sqrt(blocks.length)))
-
   blocks.forEach((block, blockIndex) => {
-    const col = blockIndex % blockColumns
-    const row = Math.floor(blockIndex / blockColumns)
+    const col = blockIndex % BLOCK_COLUMNS
+    const row = Math.floor(blockIndex / BLOCK_COLUMNS)
     const files = [...block.files].sort((a, b) => a.localeCompare(b))
     const filesPerRow = Math.max(1, Math.min(3, Math.ceil(Math.sqrt(files.length))))
     const rowCount = Math.ceil(files.length / filesPerRow)
@@ -104,9 +446,10 @@ function createNodes(
       BLOCK_PADDING * 2 +
       BLOCK_HEADER_HEIGHT +
       rowCount * FILE_NODE_HEIGHT +
-      Math.max(0, rowCount - 1) * FILE_NODE_GAP_Y
+      Math.max(0, rowCount - 1) * FILE_NODE_GAP_Y +
+      BLOCK_CONTENT_BOTTOM_PADDING
 
-    const blockNode: Node = {
+    nodes.push({
       id: block.id,
       type: 'folderBlock',
       position: {
@@ -125,9 +468,7 @@ function createNodes(
         border: cycleBlockNodeIds.has(block.id) ? '2px solid #ff8f8f' : '1px solid #5f90b7',
         background: 'rgba(8, 32, 54, 0.78)',
       },
-    }
-
-    nodes.push(blockNode)
+    })
 
     files.forEach((filePath, fileIndex) => {
       const fileCol = fileIndex % filesPerRow
@@ -351,7 +692,6 @@ export function buildDependencyFlowGraph(
 ): BuiltGraph {
   const highlightCycles = options.highlightCycles ?? false
   const routingStyle = options.routingStyle ?? 'classic'
-  const blocks = createBlocks(project)
   const fileEdgesRaw = dependencyGraph.edges.map((edge) => ({
     source: `file:${edge.fromPath}`,
     target: `file:${edge.toPath}`,
@@ -359,6 +699,50 @@ export function buildDependencyFlowGraph(
   const allFileNodeIds = project.files.map((file) => `file:${file.path}`)
   const fileCycles = detectCycleNodeIds(allFileNodeIds, fileEdgesRaw)
 
+  if (mode === 'file-level') {
+    const cycleFolderNodeIds = new Set<string>()
+    const fileNodeToFolderId = new Map<string, string>()
+    for (const file of project.files) {
+      const folderId = toFolderId(getRelativeDirectoryPath(file.path, project.rootName))
+      fileNodeToFolderId.set(`file:${file.path}`, folderId)
+    }
+    const parentFolderByFolder = new Map<string, string>()
+    const { folderById } = collectHierarchicalFolders(project)
+    for (const folder of folderById.values()) {
+      if (folder.parentId) {
+        parentFolderByFolder.set(folder.id, folder.parentId)
+      }
+    }
+    for (const fileNodeId of fileCycles.cycleNodeIds) {
+      let folderId = fileNodeToFolderId.get(fileNodeId)
+      while (folderId) {
+        cycleFolderNodeIds.add(folderId)
+        folderId = parentFolderByFolder.get(folderId)
+      }
+    }
+
+    const hierarchical = createHierarchicalFileLevelNodes(
+      project,
+      dependencyGraph,
+      fileCycles.cycleNodeIds,
+      cycleFolderNodeIds,
+    )
+    return {
+      nodes: hierarchical.nodes,
+      edges: createFileEdges(
+        dependencyGraph,
+        hierarchical.fileNodeToBlock,
+        fileCycles.cycleEdgeKeys,
+        highlightCycles,
+        routingStyle,
+      ),
+      blockCount: hierarchical.blockCount,
+      blockLayoutEdges: hierarchical.blockLayoutEdges,
+      cycleEdgeCount: fileCycles.cycleEdgeKeys.size,
+    }
+  }
+
+  const blocks = createTopLevelBlocks(project)
   const cycleBlockNodeIds = new Set<string>()
   const blockIdByFileNode = new Map<string, string>()
   for (const block of blocks) {
@@ -373,35 +757,26 @@ export function buildDependencyFlowGraph(
     }
   }
 
-  const { nodes, fileNodeToBlock } = createNodes(
+  const topLevel = createTopLevelFileNodes(
     blocks,
     project,
     dependencyGraph,
     fileCycles.cycleNodeIds,
     cycleBlockNodeIds,
   )
-  const interBlockConnections = collectInterBlockConnections(dependencyGraph, fileNodeToBlock)
+  const interBlockConnections = collectInterBlockConnections(dependencyGraph, topLevel.fileNodeToBlock)
   const blockCycles = detectCycleNodeIds(
     blocks.map((block) => block.id),
-    interBlockConnections.map((edge) => ({
-      source: edge.source,
-      target: edge.target,
-    })),
+    interBlockConnections.map((edge) => ({ source: edge.source, target: edge.target })),
   )
-  const edges =
-    mode === 'inter-block'
-      ? createInterBlockEdges(interBlockConnections, blockCycles.cycleEdgeKeys, highlightCycles, routingStyle)
-      : createFileEdges(dependencyGraph, fileNodeToBlock, fileCycles.cycleEdgeKeys, highlightCycles, routingStyle)
-  const cycleEdgeCount = mode === 'inter-block' ? blockCycles.cycleEdgeKeys.size : fileCycles.cycleEdgeKeys.size
-
   return {
-    nodes,
-    edges,
+    nodes: topLevel.nodes,
+    edges: createInterBlockEdges(interBlockConnections, blockCycles.cycleEdgeKeys, highlightCycles, routingStyle),
     blockCount: blocks.length,
     blockLayoutEdges: interBlockConnections.map((connection) => ({
       source: connection.source,
       target: connection.target,
     })),
-    cycleEdgeCount,
+    cycleEdgeCount: blockCycles.cycleEdgeKeys.size,
   }
 }

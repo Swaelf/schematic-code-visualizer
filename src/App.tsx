@@ -114,8 +114,23 @@ function App() {
     if (!flowGraph || graphMode !== 'file-level' || collapsedBlockIds.size === 0) {
       return ids
     }
+    const parentById = new Map<string, string>()
     for (const node of flowGraph.nodes) {
-      if (node.parentId && collapsedBlockIds.has(node.parentId)) {
+      if (node.parentId) {
+        parentById.set(node.id, node.parentId)
+      }
+    }
+    for (const node of flowGraph.nodes) {
+      let parentId = node.parentId
+      let isHidden = false
+      while (parentId) {
+        if (collapsedBlockIds.has(parentId)) {
+          isHidden = true
+          break
+        }
+        parentId = parentById.get(parentId)
+      }
+      if (isHidden) {
         ids.add(node.id)
       }
     }
@@ -207,39 +222,100 @@ function App() {
 
   const displayEdges = useMemo<Edge[]>(() => {
     const nodeById = new Map(visibleNodes.map((node) => [node.id, node]))
+    const parentById = new Map<string, string>()
+    for (const node of visibleNodes) {
+      if (node.parentId) {
+        parentById.set(node.id, node.parentId)
+      }
+    }
+
     const absoluteRectById = new Map<string, { x: number; y: number; width: number; height: number }>()
     const segmentLogicalIds = new Map<string, Set<string>>()
+    const folderNodeIds = new Set(visibleNodes.filter((node) => node.id.startsWith('block:')).map((node) => node.id))
 
-    for (const node of visibleNodes) {
+    const getAbsoluteRect = (nodeId: string): { x: number; y: number; width: number; height: number } | null => {
+      const cached = absoluteRectById.get(nodeId)
+      if (cached) {
+        return cached
+      }
+      const node = nodeById.get(nodeId)
+      if (!node) {
+        return null
+      }
+
       const width = Number(node.style?.width ?? 0)
       const height = Number(node.style?.height ?? 0)
-      if (node.parentId) {
-        const parent = nodeById.get(node.parentId)
-        if (parent) {
-          const parentWidth = Number(parent.style?.width ?? 0)
-          const parentHeight = Number(parent.style?.height ?? 0)
-          absoluteRectById.set(node.parentId, {
-            x: parent.position.x,
-            y: parent.position.y,
-            width: parentWidth,
-            height: parentHeight,
-          })
-          absoluteRectById.set(node.id, {
-            x: parent.position.x + node.position.x,
-            y: parent.position.y + node.position.y,
-            width,
-            height,
-          })
-          continue
+      let rect: { x: number; y: number; width: number; height: number }
+      if (!node.parentId) {
+        rect = { x: node.position.x, y: node.position.y, width, height }
+      } else {
+        const parentRect = getAbsoluteRect(node.parentId)
+        if (!parentRect) {
+          return null
+        }
+        rect = {
+          x: parentRect.x + node.position.x,
+          y: parentRect.y + node.position.y,
+          width,
+          height,
         }
       }
-      absoluteRectById.set(node.id, { x: node.position.x, y: node.position.y, width, height })
+      absoluteRectById.set(nodeId, rect)
+      return rect
+    }
+
+    for (const node of visibleNodes) {
+      getAbsoluteRect(node.id)
+    }
+
+    const getFolderChain = (folderId: string) => {
+      const chain: string[] = []
+      let current: string | undefined = folderId
+      while (current && folderNodeIds.has(current)) {
+        chain.push(current)
+        current = parentById.get(current)
+      }
+      return chain
+    }
+
+    const findFolderLca = (leftFolderId: string, rightFolderId: string) => {
+      const leftChain = getFolderChain(leftFolderId)
+      const rightSet = new Set(getFolderChain(rightFolderId))
+      for (const folderId of leftChain) {
+        if (rightSet.has(folderId)) {
+          return folderId
+        }
+      }
+      return null
+    }
+
+    const getChildUnderAncestor = (folderId: string, ancestorId: string) => {
+      if (folderId === ancestorId) {
+        return folderId
+      }
+      let current = folderId
+      let parent = parentById.get(current)
+      while (parent && parent !== ancestorId) {
+        current = parent
+        parent = parentById.get(current)
+      }
+      return parent === ancestorId ? current : folderId
     }
 
     const blockPairKey = (sourceBlockId: string, targetBlockId: string) => `${sourceBlockId}->${targetBlockId}`
     const laneInfoByEdgeId = new Map<string, { lane: number; laneCount: number; pairKey: string }>()
     const pairMetaByKey = new Map<string, { count: number; primaryEdgeId: string }>()
     const logicalEdgeIdsByPair = new Map<string, string[]>()
+    const routingFolderByEdgeId = new Map<
+      string,
+      {
+        sourceLeafFolderId: string
+        targetLeafFolderId: string
+        sourceRouteFolderId: string
+        targetRouteFolderId: string
+        lcaFolderId: string | null
+      }
+    >()
     const compactTrunkMode = routingStyle === 'bus' && busDisplayMode === 'trunk-only'
     const roundPoint = (value: number) => Math.round(value * 10) / 10
     const segmentIdFromPoints = (
@@ -257,6 +333,32 @@ function App() {
         `${roundPoint(from.x)}:${roundPoint(from.y)}`,
         `${roundPoint(to.x)}:${roundPoint(to.y)}`,
       ].join('|')
+
+    const resolveRoutingFolders = (edge: Edge) => {
+      const cached = routingFolderByEdgeId.get(edge.id)
+      if (cached) {
+        return cached
+      }
+      const sourceLeafFolderId = fileNodeToBlockId.get(edge.source) ?? edge.source
+      const targetLeafFolderId = fileNodeToBlockId.get(edge.target) ?? edge.target
+      const lcaFolderId = findFolderLca(sourceLeafFolderId, targetLeafFolderId)
+      const sourceRouteFolderId = lcaFolderId
+        ? getChildUnderAncestor(sourceLeafFolderId, lcaFolderId)
+        : sourceLeafFolderId
+      const targetRouteFolderId = lcaFolderId
+        ? getChildUnderAncestor(targetLeafFolderId, lcaFolderId)
+        : targetLeafFolderId
+
+      const resolved = {
+        sourceLeafFolderId,
+        targetLeafFolderId,
+        sourceRouteFolderId,
+        targetRouteFolderId,
+        lcaFolderId,
+      }
+      routingFolderByEdgeId.set(edge.id, resolved)
+      return resolved
+    }
 
     const aggregationPairKey = (edge: Edge, sourceBlockId: string, targetBlockId: string) => {
       const baseKey = blockPairKey(sourceBlockId, targetBlockId)
@@ -280,9 +382,8 @@ function App() {
         if (!edge.source.startsWith('file:') || !edge.target.startsWith('file:')) {
           continue
         }
-        const sourceBlockId = fileNodeToBlockId.get(edge.source) ?? edge.source
-        const targetBlockId = fileNodeToBlockId.get(edge.target) ?? edge.target
-        const key = aggregationPairKey(edge, sourceBlockId, targetBlockId)
+        const routed = resolveRoutingFolders(edge)
+        const key = aggregationPairKey(edge, routed.sourceRouteFolderId, routed.targetRouteFolderId)
         const existing = edgeIdsByPair.get(key)
         if (existing) {
           existing.push(edge.id)
@@ -306,8 +407,9 @@ function App() {
         return null
       }
 
-      const sourceBlockId = fileNodeToBlockId.get(edge.source) ?? edge.source
-      const targetBlockId = fileNodeToBlockId.get(edge.target) ?? edge.target
+      const routed = resolveRoutingFolders(edge)
+      const sourceBlockId = routed.sourceRouteFolderId
+      const targetBlockId = routed.targetRouteFolderId
       const sourceRect = absoluteRectById.get(edge.source)
       const targetRect = absoluteRectById.get(edge.target)
       const sourceBlockRect = absoluteRectById.get(sourceBlockId)
@@ -386,7 +488,18 @@ function App() {
               targetPoint,
             ]
 
-      return { points, lane, laneCount, pairKey, pairMeta, isCrossFolder, isPairPrimary, logicalEdgeIds }
+      return {
+        points,
+        lane,
+        laneCount,
+        pairKey,
+        pairMeta,
+        isCrossFolder,
+        isPairPrimary,
+        logicalEdgeIds,
+        sourceBlockId,
+        targetBlockId,
+      }
     }
 
     const selectedLogicalEdgeIds = selectedNodeId ? new Set(visibleEdges.map((edge) => edge.id)) : new Set<string>()
@@ -437,13 +550,11 @@ function App() {
         continue
       }
 
-      const sourceBlockId = fileNodeToBlockId.get(edge.source) ?? edge.source
-      const targetBlockId = fileNodeToBlockId.get(edge.target) ?? edge.target
       const segmentIds: string[] = []
       for (let index = 0; index < bus.points.length - 1; index += 1) {
         const from = bus.points[index]
         const to = bus.points[index + 1]
-        const segmentId = segmentIdFromPoints(sourceBlockId, targetBlockId, bus.pairKey, from, to)
+        const segmentId = segmentIdFromPoints(bus.sourceBlockId, bus.targetBlockId, bus.pairKey, from, to)
         segmentIds.push(segmentId)
         const existing = segmentLogicalIds.get(segmentId)
         const logicalEdgeIds = bus.logicalEdgeIds
@@ -652,6 +763,94 @@ function App() {
       }
       return next
     })
+  }
+
+  function getFolderDepth(blockId: string) {
+    if (!blockId.startsWith('block:')) {
+      return 0
+    }
+    const relative = blockId.slice('block:'.length)
+    if (!relative || relative === '(root)') {
+      return 0
+    }
+    return relative.split('/').length
+  }
+
+  function applyFolderDepthPreset(maxDepth: number) {
+    if (!flowGraph || graphMode !== 'file-level') {
+      return
+    }
+    const nextCollapsed = new Set<string>()
+    for (const node of flowGraph.nodes) {
+      if (!node.id.startsWith('block:')) {
+        continue
+      }
+      if (getFolderDepth(node.id) > maxDepth) {
+        nextCollapsed.add(node.id)
+      }
+    }
+    setCollapsedBlockIds(nextCollapsed)
+    setSelectedNodeId(null)
+    setDirectionFilter('all')
+  }
+
+  function estimateVisibleNodeCountAtDepth(maxDepth: number) {
+    if (!flowGraph) {
+      return 0
+    }
+
+    const parentById = new Map<string, string>()
+    const collapsed = new Set<string>()
+    for (const node of flowGraph.nodes) {
+      if (node.parentId) {
+        parentById.set(node.id, node.parentId)
+      }
+      if (node.id.startsWith('block:') && getFolderDepth(node.id) > maxDepth) {
+        collapsed.add(node.id)
+      }
+    }
+
+    let visibleCount = 0
+    for (const node of flowGraph.nodes) {
+      let parentId = node.parentId
+      let hidden = false
+      while (parentId) {
+        if (collapsed.has(parentId)) {
+          hidden = true
+          break
+        }
+        parentId = parentById.get(parentId)
+      }
+      if (!hidden) {
+        visibleCount += 1
+      }
+    }
+    return visibleCount
+  }
+
+  function applyAutoFolderDepth() {
+    if (!flowGraph || graphMode !== 'file-level') {
+      return
+    }
+
+    const folderDepths = flowGraph.nodes
+      .filter((node) => node.id.startsWith('block:'))
+      .map((node) => getFolderDepth(node.id))
+    const maxFolderDepth = Math.max(1, ...folderDepths)
+    const maxCandidateDepth = Math.min(maxFolderDepth, 8)
+    const targetVisibleNodes = 140
+
+    let chosenDepth = 1
+    for (let depth = 1; depth <= maxCandidateDepth; depth += 1) {
+      const visibleCount = estimateVisibleNodeCountAtDepth(depth)
+      if (visibleCount <= targetVisibleNodes) {
+        chosenDepth = depth
+      } else {
+        break
+      }
+    }
+
+    applyFolderDepthPreset(chosenDepth)
   }
 
   return (
@@ -869,8 +1068,36 @@ function App() {
               onClick={() => setCollapsedBlockIds(new Set())}
               disabled={collapsedBlockIds.size === 0 || graphMode !== 'file-level'}
             >
-              Expand all blocks
+              Expand all folders
             </button>
+          <button
+            type="button"
+            onClick={applyAutoFolderDepth}
+            disabled={graphMode !== 'file-level' || !flowGraph}
+          >
+            Auto depth
+          </button>
+          <button
+            type="button"
+            onClick={() => applyFolderDepthPreset(1)}
+            disabled={graphMode !== 'file-level'}
+          >
+            Depth 1
+          </button>
+          <button
+            type="button"
+            onClick={() => applyFolderDepthPreset(2)}
+            disabled={graphMode !== 'file-level'}
+          >
+            Depth 2
+          </button>
+          <button
+            type="button"
+            onClick={() => applyFolderDepthPreset(3)}
+            disabled={graphMode !== 'file-level'}
+          >
+            Depth 3
+          </button>
           <button
             type="button"
             onClick={() => {

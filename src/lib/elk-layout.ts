@@ -15,7 +15,9 @@ function toNumber(value: unknown, fallback: number) {
 }
 
 function applyCompactPackLayout(nodes: Node[]) {
-  const blockNodes = nodes.filter((node) => node.type === 'folderBlock' || node.type === 'group')
+  const blockNodes = nodes.filter(
+    (node) => (node.type === 'folderBlock' || node.type === 'group') && !node.parentId,
+  )
   if (blockNodes.length === 0) {
     return nodes
   }
@@ -84,6 +86,7 @@ export async function applyElkToBlockNodes(
   }
 
   const blockNodes = nodes.filter((node) => node.type === 'folderBlock' || node.type === 'group')
+    .filter((node) => !node.parentId)
   if (blockNodes.length === 0) {
     return nodes
   }
