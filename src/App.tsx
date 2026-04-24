@@ -1,13 +1,17 @@
 import { useMemo, useState } from 'react'
+import { Background, Controls, MiniMap, ReactFlow } from '@xyflow/react'
 import { analyzeProjectDependencies } from './lib/analyzer'
+import { buildDependencyFlowGraph, type GraphBuildMode } from './lib/graph-builder'
 import type { DependencyGraph, ScannedProject } from './lib/models'
 import { scanProjectFolder } from './lib/scanner'
 import { buildTreeLines } from './lib/tree-view'
 import './App.css'
+import '@xyflow/react/dist/style.css'
 
 function App() {
   const [scanResult, setScanResult] = useState<ScannedProject | null>(null)
   const [dependencyGraph, setDependencyGraph] = useState<DependencyGraph | null>(null)
+  const [graphMode, setGraphMode] = useState<GraphBuildMode>('file-level')
   const [isScanning, setIsScanning] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const treeLines = useMemo(() => buildTreeLines(scanResult?.tree ?? null), [scanResult])
@@ -28,6 +32,12 @@ function App() {
   }, [dependencyGraph])
 
   const previewEdges = useMemo(() => dependencyGraph?.edges.slice(0, 20) ?? [], [dependencyGraph])
+  const flowGraph = useMemo(() => {
+    if (!scanResult || !dependencyGraph) {
+      return null
+    }
+    return buildDependencyFlowGraph(scanResult, dependencyGraph, graphMode)
+  }, [scanResult, dependencyGraph, graphMode])
 
   async function handlePickDirectory() {
     if (!isPickerAvailable) {
@@ -120,6 +130,44 @@ function App() {
               : 'Scan a folder to generate dependency edges.'}
           </pre>
         </div>
+      </section>
+
+      <section className="panel">
+        <div className="flow-header">
+          <h2>Dependency Canvas</h2>
+          <div className="mode-switch">
+            <button
+              type="button"
+              className={graphMode === 'file-level' ? 'is-active' : ''}
+              onClick={() => setGraphMode('file-level')}
+            >
+              File-Level
+            </button>
+            <button
+              type="button"
+              className={graphMode === 'inter-block' ? 'is-active' : ''}
+              onClick={() => setGraphMode('inter-block')}
+            >
+              Inter-Block
+            </button>
+          </div>
+        </div>
+        {flowGraph ? (
+          <>
+            <p className="canvas-meta">
+              Blocks: {flowGraph.blockCount}, Nodes: {flowGraph.nodes.length}, Edges: {flowGraph.edges.length}
+            </p>
+            <div className="canvas-shell">
+              <ReactFlow nodes={flowGraph.nodes} edges={flowGraph.edges} fitView minZoom={0.1} maxZoom={1.5}>
+                <MiniMap />
+                <Controls />
+                <Background gap={24} size={1} color="#3a6689" />
+              </ReactFlow>
+            </div>
+          </>
+        ) : (
+          <p className="canvas-meta">Scan a folder to build and render dependency canvas.</p>
+        )}
       </section>
     </main>
   )

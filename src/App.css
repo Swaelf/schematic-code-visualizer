@@ -109,6 +109,53 @@ button:disabled {
   line-height: 1.4;
 }
 
+.flow-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mode-switch {
+  display: flex;
+  gap: 8px;
+}
+
+.mode-switch button {
+  padding: 7px 12px;
+  font-size: 0.86rem;
+}
+
+.mode-switch .is-active {
+  border-color: #ffd179;
+  color: #ffe6b6;
+  background: linear-gradient(180deg, #786139, #5c4829);
+}
+
+.canvas-meta {
+  color: #b7d4ea;
+  margin: 8px 0 12px;
+}
+
+.canvas-shell {
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(110, 152, 190, 0.4);
+  height: 70vh;
+  min-height: 420px;
+  background: rgba(3, 14, 25, 0.9);
+}
+
+.react-flow__node-group {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #e3f1fb;
+}
+
+.react-flow__edge-textbg {
+  fill: rgba(6, 20, 35, 0.95);
+}
+
 @media (max-width: 760px) {
   .app-shell {
     padding: 12px;
@@ -116,5 +163,10 @@ button:disabled {
 
   .grid {
     grid-template-columns: 1fr;
+  }
+
+  .flow-header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

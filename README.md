@@ -11,6 +11,8 @@ Web app for the first iteration of your idea: scan a local TypeScript project an
 - TypeScript AST analysis for static imports and exports.
 - Internal dependency graph extraction (relative imports only in MVP).
 - Dependency summary (edge count, unresolved imports, top connected files).
+- Interactive dependency canvas with directory blocks.
+- Two modes: `File-Level` and aggregated `Inter-Block` links.
 
 ## Tech Stack
 
@@ -38,6 +40,6 @@ For folder selection, use a Chromium-based browser (Chrome/Edge) because this MV
 
 ## Next Planned Steps
 
-- Group files by directory blocks (logical PCB sections).
-- Render graph with block-aware layout.
-- Add edge bundling and block-level interconnect view.
+- Add advanced layout engine (ELK) for cleaner routing on large projects.
+- Add cycle highlighting and import direction filters.
+- Add `tsconfig` alias (`baseUrl`, `paths`) resolution.
