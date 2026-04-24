@@ -42,6 +42,20 @@ Open the local URL from Vite (usually `http://localhost:5173`).
 npm run build
 ```
 
+## Smoke Tests
+
+Run parser/resolver smoke checks on local TypeScript repositories:
+
+```bash
+npm run smoke -- <repo-path-1> <repo-path-2> <repo-path-3>
+```
+
+Example:
+
+```bash
+npm run smoke -- .\smoke-repos\zustand .\smoke-repos\tsup .\smoke-repos\nanostores
+```
+
 ## Browser Notes
 
 For folder selection, use a Chromium-based browser (Chrome/Edge) because this MVP relies on the File System Access API.

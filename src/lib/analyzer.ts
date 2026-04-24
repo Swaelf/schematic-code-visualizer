@@ -93,10 +93,22 @@ function collectFileAnalysis(file: SourceFileRecord): { imports: string[]; expor
 }
 
 function expandCandidates(base: string) {
-  const candidates = [normalizePath(base)]
-  for (const extension of SUPPORTED_EXTENSIONS) {
-    candidates.push(normalizePath(`${base}${extension}`))
-    candidates.push(normalizePath(`${base}/index${extension}`))
+  const variants = new Set<string>()
+  variants.add(base)
+
+  for (const extension of ['.js', '.mjs', '.cjs', '.jsx']) {
+    if (base.endsWith(extension)) {
+      variants.add(base.slice(0, -extension.length))
+    }
+  }
+
+  const candidates: string[] = []
+  for (const variant of variants) {
+    candidates.push(normalizePath(variant))
+    for (const extension of SUPPORTED_EXTENSIONS) {
+      candidates.push(normalizePath(`${variant}${extension}`))
+      candidates.push(normalizePath(`${variant}/index${extension}`))
+    }
   }
   return candidates
 }
