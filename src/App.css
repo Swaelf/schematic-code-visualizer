@@ -15,6 +15,18 @@
   box-shadow: 0 10px 30px rgba(6, 17, 30, 0.35);
 }
 
+.tab-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.tab-nav button.is-active {
+  border-color: #ffd179;
+  color: #ffe6b6;
+  background: linear-gradient(180deg, #786139, #5c4829);
+}
+
 h1 {
   margin: 0 0 8px;
   font-size: clamp(1.4rem, 2.8vw, 2.2rem);
@@ -201,5 +213,9 @@ button:disabled {
   .flow-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .tab-nav {
+    gap: 8px;
   }
 }

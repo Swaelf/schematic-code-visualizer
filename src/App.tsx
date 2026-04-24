@@ -10,7 +10,10 @@ import { buildTreeLines } from './lib/tree-view'
 import './App.css'
 import '@xyflow/react/dist/style.css'
 
+type AppTab = 'overview' | 'board' | 'dependencies' | 'diagnostics'
+
 function App() {
+  const [activeTab, setActiveTab] = useState<AppTab>('overview')
   const [scanResult, setScanResult] = useState<ScannedProject | null>(null)
   const [dependencyGraph, setDependencyGraph] = useState<DependencyGraph | null>(null)
   const [graphMode, setGraphMode] = useState<GraphBuildMode>('file-level')
@@ -234,6 +237,7 @@ function App() {
     setCollapsedBlockIds(new Set())
     setSearchQuery('')
     setHoveredFilePath(null)
+    setActiveTab('overview')
   }, [graphMode, scanResult?.rootName])
 
   async function handlePickDirectory() {
@@ -346,169 +350,227 @@ function App() {
         {errorMessage && <p className="error">{errorMessage}</p>}
       </section>
 
-      <section className="panel grid">
-        <div className="stats">
-          <h2>Scan Summary</h2>
-          <p>
-            <strong>Root:</strong> {scanResult?.rootName ?? '-'}
-          </p>
-          <p>
-            <strong>Directories:</strong> {scanResult?.directoryCount ?? 0}
-          </p>
-          <p>
-            <strong>TS Files:</strong> {scanResult?.tsFileCount ?? 0}
-          </p>
-          <p>
-            <strong>Dependency Edges:</strong> {dependencyGraph?.edges.length ?? 0}
-          </p>
-          <p>
-            <strong>Unresolved Imports:</strong> {dependencyGraph?.unresolvedImportCount ?? 0}
-          </p>
-          <p>
-            <strong>Unresolved External:</strong> {dependencyGraph?.unresolvedExternalCount ?? 0}
-          </p>
-          <p>
-            <strong>Unresolved Internal:</strong> {dependencyGraph?.unresolvedInternalCount ?? 0}
-          </p>
-          <p>
-            <strong>Alias Resolved:</strong> {dependencyGraph?.aliasResolvedCount ?? 0}
-          </p>
-        </div>
-        <div className="tree">
-          <h2>Directory Tree</h2>
-          <pre>{treeLines.length > 0 ? treeLines.join('\n') : 'Select a folder to scan.'}</pre>
-        </div>
+      <section className="panel tab-nav">
+        <button type="button" className={activeTab === 'overview' ? 'is-active' : ''} onClick={() => setActiveTab('overview')}>
+          Overview
+        </button>
+        <button type="button" className={activeTab === 'board' ? 'is-active' : ''} onClick={() => setActiveTab('board')}>
+          Board
+        </button>
+        <button
+          type="button"
+          className={activeTab === 'dependencies' ? 'is-active' : ''}
+          onClick={() => setActiveTab('dependencies')}
+        >
+          Dependencies
+        </button>
+        <button
+          type="button"
+          className={activeTab === 'diagnostics' ? 'is-active' : ''}
+          onClick={() => setActiveTab('diagnostics')}
+        >
+          Diagnostics
+        </button>
       </section>
 
-      <section className="panel grid">
-        <div className="stats">
-          <h2>Top Connected Files</h2>
-          {topConnectedFiles.length > 0 ? (
-            <ul className="flat-list">
-              {topConnectedFiles.map((file) => (
-                <li key={file.path}>
-                  <code>{file.path}</code> ({file.resolvedImports.length} links, {file.exports.length} exports)
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p>No dependency data yet.</p>
-          )}
-        </div>
-        <div className="tree">
-          <h2>Dependency Preview (first 20 edges)</h2>
-          <pre>
-            {previewEdges.length > 0
-              ? previewEdges.map((edge) => `${edge.fromPath} -> ${edge.toPath}`).join('\n')
-              : 'Scan a folder to generate dependency edges.'}
-          </pre>
-        </div>
-      </section>
+      {activeTab === 'overview' && (
+        <section className="panel grid">
+          <div className="stats">
+            <h2>Scan Summary</h2>
+            <p>
+              <strong>Root:</strong> {scanResult?.rootName ?? '-'}
+            </p>
+            <p>
+              <strong>Directories:</strong> {scanResult?.directoryCount ?? 0}
+            </p>
+            <p>
+              <strong>TS Files:</strong> {scanResult?.tsFileCount ?? 0}
+            </p>
+            <p>
+              <strong>Dependency Edges:</strong> {dependencyGraph?.edges.length ?? 0}
+            </p>
+            <p>
+              <strong>Cycles:</strong> {flowGraph?.cycleEdgeCount ?? 0}
+            </p>
+            <p>
+              <strong>Search Matches:</strong> {matchingFileNodeIds.size}
+            </p>
+          </div>
+          <div className="tree">
+            <h2>Directory Tree</h2>
+            <pre>{treeLines.length > 0 ? treeLines.join('\n') : 'Select a folder to scan.'}</pre>
+          </div>
+        </section>
+      )}
 
-      <section className="panel">
-        <div className="flow-header">
-          <h2>Dependency Canvas</h2>
-          <div className="mode-switch">
+      {activeTab === 'dependencies' && (
+        <section className="panel grid">
+          <div className="stats">
+            <h2>Top Connected Files</h2>
+            {topConnectedFiles.length > 0 ? (
+              <ul className="flat-list">
+                {topConnectedFiles.map((file) => (
+                  <li key={file.path}>
+                    <code>{file.path}</code> ({file.resolvedImports.length} links, {file.exports.length} exports)
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No dependency data yet.</p>
+            )}
+          </div>
+          <div className="tree">
+            <h2>Dependency Preview (first 20 edges)</h2>
+            <pre>
+              {previewEdges.length > 0
+                ? previewEdges.map((edge) => `${edge.fromPath} -> ${edge.toPath}`).join('\n')
+                : 'Scan a folder to generate dependency edges.'}
+            </pre>
+          </div>
+        </section>
+      )}
+
+      {activeTab === 'diagnostics' && (
+        <section className="panel grid">
+          <div className="stats">
+            <h2>Resolver Diagnostics</h2>
+            <p>
+              <strong>Unresolved Imports:</strong> {dependencyGraph?.unresolvedImportCount ?? 0}
+            </p>
+            <p>
+              <strong>Unresolved External:</strong> {dependencyGraph?.unresolvedExternalCount ?? 0}
+            </p>
+            <p>
+              <strong>Unresolved Internal:</strong> {dependencyGraph?.unresolvedInternalCount ?? 0}
+            </p>
+            <p>
+              <strong>Alias Resolved:</strong> {dependencyGraph?.aliasResolvedCount ?? 0}
+            </p>
+            <p>
+              <strong>Layout Status:</strong> {isLayouting ? 'running' : 'ready'}
+            </p>
+          </div>
+          <div className="tree">
+            <h2>Selection / Hover</h2>
+            <pre>
+              {selectedNodeId ? `Selected: ${selectedNodeId}\n` : 'Selected: -\n'}
+              {hoveredFilePath ? `Hover: ${hoveredFilePath}\n` : 'Hover: -\n'}
+              {hoveredFileAnalysis
+                ? `Exports: ${
+                    hoveredFileAnalysis.exports.length > 0 ? hoveredFileAnalysis.exports.join(', ') : 'none'
+                  }`
+                : 'Exports: -'}
+            </pre>
+          </div>
+        </section>
+      )}
+
+      {activeTab === 'board' && (
+        <section className="panel">
+          <div className="flow-header">
+            <h2>Dependency Canvas</h2>
+            <div className="mode-switch">
+              <button
+                type="button"
+                className={graphMode === 'file-level' ? 'is-active' : ''}
+                onClick={() => setGraphMode('file-level')}
+              >
+                File-Level
+              </button>
+              <button
+                type="button"
+                className={graphMode === 'inter-block' ? 'is-active' : ''}
+                onClick={() => setGraphMode('inter-block')}
+              >
+                Inter-Block
+              </button>
+            </div>
+          </div>
+          <div className="flow-controls">
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={highlightCycles}
+                onChange={(event) => setHighlightCycles(event.target.checked)}
+              />
+              Highlight cycles
+            </label>
+            <label className="toggle-row">
+              Direction
+              <select
+                value={directionFilter}
+                onChange={(event) => setDirectionFilter(event.target.value as 'all' | 'incoming' | 'outgoing')}
+                disabled={!selectedNodeId}
+              >
+                <option value="all">all</option>
+                <option value="incoming">incoming</option>
+                <option value="outgoing">outgoing</option>
+              </select>
+            </label>
+            <label className="toggle-row search-row">
+              Search file
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="name or path"
+              />
+            </label>
             <button
               type="button"
-              className={graphMode === 'file-level' ? 'is-active' : ''}
-              onClick={() => setGraphMode('file-level')}
+              onClick={toggleSelectedBlockCollapse}
+              disabled={graphMode !== 'file-level' || !selectedBlockId}
             >
-              File-Level
+              {selectedBlockId && collapsedBlockIds.has(selectedBlockId) ? 'Expand block' : 'Collapse block'}
             </button>
             <button
               type="button"
-              className={graphMode === 'inter-block' ? 'is-active' : ''}
-              onClick={() => setGraphMode('inter-block')}
+              onClick={() => setCollapsedBlockIds(new Set())}
+              disabled={collapsedBlockIds.size === 0 || graphMode !== 'file-level'}
             >
-              Inter-Block
+              Expand all blocks
+            </button>
+            <button type="button" onClick={() => setSelectedNodeId(null)} disabled={!selectedNodeId}>
+              Clear selection
             </button>
           </div>
-        </div>
-        <div className="flow-controls">
-          <label className="toggle-row">
-            <input
-              type="checkbox"
-              checked={highlightCycles}
-              onChange={(event) => setHighlightCycles(event.target.checked)}
-            />
-            Highlight cycles
-          </label>
-          <label className="toggle-row">
-            Direction
-            <select
-              value={directionFilter}
-              onChange={(event) => setDirectionFilter(event.target.value as 'all' | 'incoming' | 'outgoing')}
-              disabled={!selectedNodeId}
-            >
-              <option value="all">all</option>
-              <option value="incoming">incoming</option>
-              <option value="outgoing">outgoing</option>
-            </select>
-          </label>
-          <label className="toggle-row search-row">
-            Search file
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="name or path"
-            />
-          </label>
-          <button
-            type="button"
-            onClick={toggleSelectedBlockCollapse}
-            disabled={graphMode !== 'file-level' || !selectedBlockId}
-          >
-            {selectedBlockId && collapsedBlockIds.has(selectedBlockId) ? 'Expand block' : 'Collapse block'}
-          </button>
-          <button
-            type="button"
-            onClick={() => setCollapsedBlockIds(new Set())}
-            disabled={collapsedBlockIds.size === 0 || graphMode !== 'file-level'}
-          >
-            Expand all blocks
-          </button>
-          <button type="button" onClick={() => setSelectedNodeId(null)} disabled={!selectedNodeId}>
-            Clear selection
-          </button>
-        </div>
-        {flowGraph ? (
-          <>
-            <p className="canvas-meta">
-              Blocks: {flowGraph.blockCount}, Nodes: {flowGraph.nodes.length}, Visible edges: {visibleEdges.length}
-              {' | '}Cycles: {flowGraph.cycleEdgeCount}
-              {' | '}Matches: {matchingFileNodeIds.size}
-              {isLayouting ? ' | Layout: running...' : ' | Layout: ELK ready'}
-              {selectedNodeId ? ` | Selected: ${selectedNodeId}` : ''}
-            </p>
-            <p className="canvas-meta">
-              Hover: {hoveredFilePath ?? '-'}
-              {hoveredFileAnalysis
-                ? ` | Exports: ${hoveredFileAnalysis.exports.length > 0 ? hoveredFileAnalysis.exports.join(', ') : 'none'}`
-                : ''}
-            </p>
-            <div className="canvas-shell">
-              <ReactFlow
-                nodes={visibleNodes}
-                edges={visibleEdges}
-                onNodeClick={onNodeClick}
-                onNodeMouseEnter={onNodeMouseEnter}
-                onNodeMouseLeave={onNodeMouseLeave}
-                fitView
-                minZoom={0.1}
-                maxZoom={1.5}
-              >
-                <MiniMap />
-                <Controls />
-                <Background gap={24} size={1} color="#3a6689" />
-              </ReactFlow>
-            </div>
-          </>
-        ) : (
-          <p className="canvas-meta">Scan a folder to build and render dependency canvas.</p>
-        )}
-      </section>
+          {flowGraph ? (
+            <>
+              <p className="canvas-meta">
+                Blocks: {flowGraph.blockCount}, Nodes: {flowGraph.nodes.length}, Visible edges: {visibleEdges.length}
+                {' | '}Cycles: {flowGraph.cycleEdgeCount}
+                {' | '}Matches: {matchingFileNodeIds.size}
+                {isLayouting ? ' | Layout: running...' : ' | Layout: ELK ready'}
+                {selectedNodeId ? ` | Selected: ${selectedNodeId}` : ''}
+              </p>
+              <p className="canvas-meta">
+                Hover: {hoveredFilePath ?? '-'}
+                {hoveredFileAnalysis
+                  ? ` | Exports: ${hoveredFileAnalysis.exports.length > 0 ? hoveredFileAnalysis.exports.join(', ') : 'none'}`
+                  : ''}
+              </p>
+              <div className="canvas-shell">
+                <ReactFlow
+                  nodes={visibleNodes}
+                  edges={visibleEdges}
+                  onNodeClick={onNodeClick}
+                  onNodeMouseEnter={onNodeMouseEnter}
+                  onNodeMouseLeave={onNodeMouseLeave}
+                  fitView
+                  minZoom={0.1}
+                  maxZoom={1.5}
+                >
+                  <MiniMap />
+                  <Controls />
+                  <Background gap={24} size={1} color="#3a6689" />
+                </ReactFlow>
+              </div>
+            </>
+          ) : (
+            <p className="canvas-meta">Scan a folder to build and render dependency canvas.</p>
+          )}
+        </section>
+      )}
     </main>
   )
 }
