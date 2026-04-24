@@ -5,6 +5,7 @@ import { applyElkToBlockNodes } from './lib/elk-layout'
 import { buildDependencyFlowGraph, type GraphBuildMode } from './lib/graph-builder'
 import type { DependencyGraph, ScannedProject } from './lib/models'
 import { scanProjectFolder } from './lib/scanner'
+import { readTsConfigAliasConfig } from './lib/tsconfig-reader'
 import { buildTreeLines } from './lib/tree-view'
 import './App.css'
 import '@xyflow/react/dist/style.css'
@@ -151,8 +152,14 @@ function App() {
         mode: 'read',
       })
       const scannedProject = await scanProjectFolder(directoryHandle)
+      const tsconfigAliases = await readTsConfigAliasConfig(directoryHandle)
       setScanResult(scannedProject)
-      setDependencyGraph(analyzeProjectDependencies(scannedProject.files))
+      setDependencyGraph(
+        analyzeProjectDependencies(scannedProject.files, {
+          rootName: scannedProject.rootName,
+          tsconfigAliases,
+        }),
+      )
     } catch (error) {
       if ((error as DOMException).name === 'AbortError') {
         return
@@ -205,6 +212,9 @@ function App() {
           </p>
           <p>
             <strong>Unresolved Imports:</strong> {dependencyGraph?.unresolvedImportCount ?? 0}
+          </p>
+          <p>
+            <strong>Alias Resolved:</strong> {dependencyGraph?.aliasResolvedCount ?? 0}
           </p>
         </div>
         <div className="tree">

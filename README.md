@@ -16,6 +16,7 @@ Web app for the first iteration of your idea: scan a local TypeScript project an
 - ELK-based auto layout for block positioning.
 - Cycle detection and highlight mode.
 - Direction filters (`all`, `incoming`, `outgoing`) for selected node.
+- `tsconfig.json` alias resolution (`baseUrl` + `paths`) for import links.
 
 ## Tech Stack
 
@@ -43,5 +44,4 @@ For folder selection, use a Chromium-based browser (Chrome/Edge) because this MV
 
 ## Next Planned Steps
 
-- Add `tsconfig` alias (`baseUrl`, `paths`) resolution.
 - Reduce bundle size (move heavy analysis code to Web Worker / split chunks).

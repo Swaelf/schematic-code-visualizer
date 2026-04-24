@@ -1,8 +1,18 @@
 import ts from 'typescript'
-import type { DependencyEdge, DependencyGraph, FileAnalysis, SourceFileRecord } from './models'
-import { dirname, joinPath } from './path-utils'
+import type { DependencyEdge, DependencyGraph, FileAnalysis, SourceFileRecord, TsConfigAliasConfig } from './models'
+import { dirname, joinPath, normalizePath } from './path-utils'
 
 const SUPPORTED_EXTENSIONS = ['.ts', '.tsx']
+
+type AnalyzeOptions = {
+  rootName: string
+  tsconfigAliases?: TsConfigAliasConfig | null
+}
+
+type ResolvedImport = {
+  path: string
+  viaAlias: boolean
+}
 
 function scriptKindFromPath(path: string) {
   return path.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
@@ -82,37 +92,113 @@ function collectFileAnalysis(file: SourceFileRecord): { imports: string[]; expor
   return { imports, exports }
 }
 
-function resolveImport(
-  importingFilePath: string,
-  specifier: string,
-  projectFileSet: Set<string>,
-) {
-  if (!specifier.startsWith('.')) {
-    return null
-  }
-
-  const base = joinPath(dirname(importingFilePath), specifier)
-  const candidates = [base]
-
+function expandCandidates(base: string) {
+  const candidates = [normalizePath(base)]
   for (const extension of SUPPORTED_EXTENSIONS) {
-    candidates.push(`${base}${extension}`)
-    candidates.push(`${base}/index${extension}`)
+    candidates.push(normalizePath(`${base}${extension}`))
+    candidates.push(normalizePath(`${base}/index${extension}`))
   }
+  return candidates
+}
 
-  for (const candidate of candidates) {
+function resolveRelativeImport(importingFilePath: string, specifier: string, projectFileSet: Set<string>) {
+  const base = joinPath(dirname(importingFilePath), specifier)
+  for (const candidate of expandCandidates(base)) {
     if (projectFileSet.has(candidate)) {
       return candidate
+    }
+  }
+  return null
+}
+
+function parsePathPattern(pattern: string) {
+  const wildcardIndex = pattern.indexOf('*')
+  if (wildcardIndex < 0) {
+    return { prefix: pattern, suffix: '', hasWildcard: false }
+  }
+  return {
+    prefix: pattern.slice(0, wildcardIndex),
+    suffix: pattern.slice(wildcardIndex + 1),
+    hasWildcard: true,
+  }
+}
+
+function matchAliasPattern(specifier: string, pattern: string) {
+  const parsed = parsePathPattern(pattern)
+  if (!parsed.hasWildcard) {
+    return specifier === pattern ? '' : null
+  }
+  if (!specifier.startsWith(parsed.prefix) || !specifier.endsWith(parsed.suffix)) {
+    return null
+  }
+  return specifier.slice(parsed.prefix.length, specifier.length - parsed.suffix.length)
+}
+
+function applyCapturedValue(template: string, captured: string) {
+  return template.includes('*') ? template.replace('*', captured) : template
+}
+
+function resolveAliasImport(
+  specifier: string,
+  projectFileSet: Set<string>,
+  options: AnalyzeOptions,
+): string | null {
+  const aliasConfig = options.tsconfigAliases
+  const rootPrefix = options.rootName
+  const baseUrl = aliasConfig?.baseUrl?.trim() || ''
+  const baseRootPath = baseUrl ? joinPath(rootPrefix, baseUrl) : rootPrefix
+
+  if (aliasConfig?.paths) {
+    for (const [pattern, targetPatterns] of Object.entries(aliasConfig.paths)) {
+      const captured = matchAliasPattern(specifier, pattern)
+      if (captured === null) {
+        continue
+      }
+      for (const targetPattern of targetPatterns) {
+        const replaced = applyCapturedValue(targetPattern, captured)
+        const base = joinPath(baseRootPath, replaced)
+        for (const candidate of expandCandidates(base)) {
+          if (projectFileSet.has(candidate)) {
+            return candidate
+          }
+        }
+      }
+    }
+  }
+
+  if (baseUrl) {
+    const base = joinPath(baseRootPath, specifier)
+    for (const candidate of expandCandidates(base)) {
+      if (projectFileSet.has(candidate)) {
+        return candidate
+      }
     }
   }
 
   return null
 }
 
-export function analyzeProjectDependencies(files: SourceFileRecord[]): DependencyGraph {
+function resolveImport(
+  importingFilePath: string,
+  specifier: string,
+  projectFileSet: Set<string>,
+  options: AnalyzeOptions,
+): ResolvedImport | null {
+  if (specifier.startsWith('.')) {
+    const path = resolveRelativeImport(importingFilePath, specifier, projectFileSet)
+    return path ? { path, viaAlias: false } : null
+  }
+
+  const aliasPath = resolveAliasImport(specifier, projectFileSet, options)
+  return aliasPath ? { path: aliasPath, viaAlias: true } : null
+}
+
+export function analyzeProjectDependencies(files: SourceFileRecord[], options: AnalyzeOptions): DependencyGraph {
   const projectFileSet = new Set(files.map((file) => file.path))
   const analyses: FileAnalysis[] = []
   const edges: DependencyEdge[] = []
   let unresolvedImportCount = 0
+  let aliasResolvedCount = 0
 
   for (const file of files) {
     const { imports, exports } = collectFileAnalysis(file)
@@ -120,15 +206,18 @@ export function analyzeProjectDependencies(files: SourceFileRecord[]): Dependenc
     const unresolvedImports: string[] = []
 
     for (const specifier of imports) {
-      const resolvedPath = resolveImport(file.path, specifier, projectFileSet)
-      if (!resolvedPath) {
+      const resolved = resolveImport(file.path, specifier, projectFileSet, options)
+      if (!resolved) {
         unresolvedImports.push(specifier)
         continue
       }
-      resolvedImports.push(resolvedPath)
+      resolvedImports.push(resolved.path)
+      if (resolved.viaAlias) {
+        aliasResolvedCount += 1
+      }
       edges.push({
         fromPath: file.path,
-        toPath: resolvedPath,
+        toPath: resolved.path,
         specifier,
       })
     }
@@ -147,5 +236,6 @@ export function analyzeProjectDependencies(files: SourceFileRecord[]): Dependenc
     files: analyses,
     edges,
     unresolvedImportCount,
+    aliasResolvedCount,
   }
 }

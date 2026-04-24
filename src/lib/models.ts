@@ -37,4 +37,10 @@ export type DependencyGraph = {
   files: FileAnalysis[]
   edges: DependencyEdge[]
   unresolvedImportCount: number
+  aliasResolvedCount: number
+}
+
+export type TsConfigAliasConfig = {
+  baseUrl?: string
+  paths?: Record<string, string[]>
 }
