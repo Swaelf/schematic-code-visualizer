@@ -50,6 +50,8 @@ Run parser/resolver smoke checks on local TypeScript repositories:
 npm run smoke -- <repo-path-1> <repo-path-2> <repo-path-3>
 ```
 
+The report includes `unresolvedExternal` vs `unresolvedInternal` to separate package imports from likely local/alias misses.
+
 Example:
 
 ```bash

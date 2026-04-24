@@ -13,6 +13,8 @@ type RepoResult = {
   files: number
   edges: number
   unresolved: number
+  unresolvedExternal: number
+  unresolvedInternal: number
   aliasResolved: number
 }
 
@@ -175,6 +177,8 @@ async function runForRepo(repoPath: string): Promise<RepoResult> {
     files: files.length,
     edges: graph.edges.length,
     unresolved: graph.unresolvedImportCount,
+    unresolvedExternal: graph.unresolvedExternalCount,
+    unresolvedInternal: graph.unresolvedInternalCount,
     aliasResolved: graph.aliasResolvedCount,
   }
 }
@@ -199,6 +203,8 @@ async function main() {
         `files=${result.files}`,
         `edges=${result.edges}`,
         `unresolved=${result.unresolved}`,
+        `unresolvedExternal=${result.unresolvedExternal}`,
+        `unresolvedInternal=${result.unresolvedInternal}`,
         `aliasResolved=${result.aliasResolved}`,
       ].join(' | '),
     )
@@ -209,10 +215,12 @@ async function main() {
       acc.files += item.files
       acc.edges += item.edges
       acc.unresolved += item.unresolved
+      acc.unresolvedExternal += item.unresolvedExternal
+      acc.unresolvedInternal += item.unresolvedInternal
       acc.aliasResolved += item.aliasResolved
       return acc
     },
-    { files: 0, edges: 0, unresolved: 0, aliasResolved: 0 },
+    { files: 0, edges: 0, unresolved: 0, unresolvedExternal: 0, unresolvedInternal: 0, aliasResolved: 0 },
   )
 
   console.log('---')
@@ -222,6 +230,8 @@ async function main() {
       `files=${totals.files}`,
       `edges=${totals.edges}`,
       `unresolved=${totals.unresolved}`,
+      `unresolvedExternal=${totals.unresolvedExternal}`,
+      `unresolvedInternal=${totals.unresolvedInternal}`,
       `aliasResolved=${totals.aliasResolved}`,
     ].join(' | '),
   )

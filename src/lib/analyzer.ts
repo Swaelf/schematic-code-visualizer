@@ -146,6 +146,26 @@ function matchAliasPattern(specifier: string, pattern: string) {
   return specifier.slice(parsed.prefix.length, specifier.length - parsed.suffix.length)
 }
 
+function mayBeInternalAliasSpecifier(specifier: string, aliasConfig: TsConfigAliasConfig | null | undefined) {
+  if (!aliasConfig) {
+    return false
+  }
+
+  if (aliasConfig.paths) {
+    for (const pattern of Object.keys(aliasConfig.paths)) {
+      if (matchAliasPattern(specifier, pattern) !== null) {
+        return true
+      }
+    }
+  }
+
+  if (aliasConfig.baseUrl) {
+    return true
+  }
+
+  return false
+}
+
 function applyCapturedValue(template: string, captured: string) {
   return template.includes('*') ? template.replace('*', captured) : template
 }
@@ -214,6 +234,8 @@ export function analyzeProjectDependencies(files: SourceFileRecord[], options: A
   const analyses: FileAnalysis[] = []
   const edges: DependencyEdge[] = []
   let unresolvedImportCount = 0
+  let unresolvedExternalCount = 0
+  let unresolvedInternalCount = 0
   let aliasResolvedCount = 0
 
   for (const file of files) {
@@ -225,6 +247,11 @@ export function analyzeProjectDependencies(files: SourceFileRecord[], options: A
       const resolved = resolveImport(file.path, specifier, projectFileSet, options)
       if (!resolved) {
         unresolvedImports.push(specifier)
+        if (specifier.startsWith('.') || mayBeInternalAliasSpecifier(specifier, options.tsconfigAliases)) {
+          unresolvedInternalCount += 1
+        } else {
+          unresolvedExternalCount += 1
+        }
         continue
       }
       resolvedImports.push(resolved.path)
@@ -252,6 +279,8 @@ export function analyzeProjectDependencies(files: SourceFileRecord[], options: A
     files: analyses,
     edges,
     unresolvedImportCount,
+    unresolvedExternalCount,
+    unresolvedInternalCount,
     aliasResolvedCount,
   }
 }

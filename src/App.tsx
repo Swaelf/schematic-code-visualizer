@@ -365,6 +365,12 @@ function App() {
             <strong>Unresolved Imports:</strong> {dependencyGraph?.unresolvedImportCount ?? 0}
           </p>
           <p>
+            <strong>Unresolved External:</strong> {dependencyGraph?.unresolvedExternalCount ?? 0}
+          </p>
+          <p>
+            <strong>Unresolved Internal:</strong> {dependencyGraph?.unresolvedInternalCount ?? 0}
+          </p>
+          <p>
             <strong>Alias Resolved:</strong> {dependencyGraph?.aliasResolvedCount ?? 0}
           </p>
         </div>
