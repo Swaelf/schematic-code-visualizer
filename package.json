@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "smoke": "tsx scripts/smoke-test.ts"
+    "smoke": "tsx scripts/smoke-test.ts",
+    "git-churn": "tsx scripts/git-churn-report.ts"
   },
   "dependencies": {
     "@xyflow/react": "^12.10.2",

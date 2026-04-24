@@ -64,6 +64,20 @@ Alias/extends fixture check:
 npm run smoke -- .\smoke-fixtures\alias-extends
 ```
 
+## Git Churn Report
+
+Generate a git churn JSON that can be imported in `Diagnostics -> Git Churn`:
+
+```bash
+npm run git-churn -- --since "180 days ago" --out git-churn-report.json
+```
+
+Optional arguments:
+
+- `--repo <path>`: repository root (defaults to current directory)
+- `--since <git-date-expression>`: date range for `git log`
+- `--out <file>`: output JSON filename/path (relative to repo root by default)
+
 ## Browser Notes
 
 For folder selection, use a Chromium-based browser (Chrome/Edge) because this MVP relies on the File System Access API.

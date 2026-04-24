@@ -147,6 +147,19 @@ type ArchitectureExportReport = {
     toPath: string
   }>
 }
+type GitChurnReport = {
+  type: 'git-churn-report-v1'
+  generatedAt: string
+  repoRootName: string
+  since: string
+  files: Array<{
+    path: string
+    commits: number
+    additions: number
+    deletions: number
+    churn: number
+  }>
+}
 type ArchitectureConfig = {
   layerMatchers: Record<ArchitectureLayerId, string[]>
   allowedTargets: Record<ArchitectureLayerId, ArchitectureLayerId[]>
@@ -574,6 +587,20 @@ function isAnalysisExportReportCandidate(value: unknown): value is AnalysisExpor
   )
 }
 
+function isGitChurnReportCandidate(value: unknown): value is GitChurnReport {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const candidate = value as Partial<GitChurnReport>
+  return (
+    candidate.type === 'git-churn-report-v1' &&
+    typeof candidate.generatedAt === 'string' &&
+    typeof candidate.repoRootName === 'string' &&
+    typeof candidate.since === 'string' &&
+    Array.isArray(candidate.files)
+  )
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('overview')
   const [overviewStructureMode, setOverviewStructureMode] = useState<StructureViewMode>('treemap')
@@ -615,6 +642,9 @@ function App() {
   const [baselineReport, setBaselineReport] = useState<AnalysisExportReport | null>(null)
   const [baselineReportName, setBaselineReportName] = useState<string | null>(null)
   const [baselineReportError, setBaselineReportError] = useState<string | null>(null)
+  const [gitChurnReport, setGitChurnReport] = useState<GitChurnReport | null>(null)
+  const [gitChurnReportName, setGitChurnReportName] = useState<string | null>(null)
+  const [gitChurnReportError, setGitChurnReportError] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const treeLines = useMemo(() => buildTreeLines(scanResult?.tree ?? null), [scanResult])
   const fileLocByPath = useMemo(() => {
@@ -1162,6 +1192,53 @@ function App() {
       .sort((left, right) => right.split(' -> ').length - left.split(' -> ').length || left.localeCompare(right))
       .slice(0, 20)
   }, [dependencyGraph])
+  const gitChurnByPath = useMemo(() => {
+    const map = new Map<string, { commits: number; additions: number; deletions: number; churn: number }>()
+    const rootName = scanResult?.rootName
+    for (const item of gitChurnReport?.files ?? []) {
+      const normalized = item.path.replace(/\\/g, '/').replace(/^\.\//, '')
+      map.set(normalized, {
+        commits: item.commits,
+        additions: item.additions,
+        deletions: item.deletions,
+        churn: item.churn,
+      })
+      if (rootName && !normalized.startsWith(`${rootName}/`)) {
+        map.set(`${rootName}/${normalized}`, {
+          commits: item.commits,
+          additions: item.additions,
+          deletions: item.deletions,
+          churn: item.churn,
+        })
+      }
+    }
+    return map
+  }, [gitChurnReport, scanResult?.rootName])
+  const churnHotFiles = useMemo(() => {
+    if (!dependencyGraph) {
+      return []
+    }
+    return dependencyGraph.files
+      .map((file) => {
+        const churn = gitChurnByPath.get(file.path)
+        const incoming = incomingEdgeCountByPath.get(file.path) ?? 0
+        const outgoing = outgoingEdgeCountByPath.get(file.path) ?? 0
+        const centrality = incoming + outgoing
+        const churnScore = churn?.churn ?? 0
+        const commits = churn?.commits ?? 0
+        const weighted = Number((churnScore * (1 + Math.log2(centrality + 1))).toFixed(2))
+        return {
+          path: file.path,
+          churn: churnScore,
+          commits,
+          centrality,
+          weighted,
+        }
+      })
+      .filter((item) => item.churn > 0)
+      .sort((left, right) => right.weighted - left.weighted || right.churn - left.churn || left.path.localeCompare(right.path))
+      .slice(0, 20)
+  }, [dependencyGraph, gitChurnByPath, incomingEdgeCountByPath, outgoingEdgeCountByPath])
   const architectureViolationEdgeKeySet = useMemo(() => {
     const keys = new Set<string>()
     for (const item of architectureViolations) {
@@ -2639,6 +2716,32 @@ function App() {
     }
   }
 
+  async function importGitChurnReport(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file) {
+      return
+    }
+    try {
+      const raw = await file.text()
+      const parsed = JSON.parse(raw) as unknown
+      if (!isGitChurnReportCandidate(parsed)) {
+        setGitChurnReportError('Selected file is not a valid git churn report JSON.')
+        setGitChurnReport(null)
+        setGitChurnReportName(null)
+        return
+      }
+      setGitChurnReport(parsed)
+      setGitChurnReportName(file.name)
+      setGitChurnReportError(null)
+    } catch {
+      setGitChurnReportError('Failed to import git churn report (invalid JSON or unreadable file).')
+      setGitChurnReport(null)
+      setGitChurnReportName(null)
+    } finally {
+      event.target.value = ''
+    }
+  }
+
   useEffect(() => {
     if (!flowGraph || graphMode !== 'file-level') {
       return
@@ -2905,6 +3008,51 @@ function App() {
             </div>
 
             <div className="section-card">
+              <h2>Git Churn</h2>
+              <p>Import git churn JSON generated via `npm run git-churn`.</p>
+              <div className="actions">
+                <input type="file" accept=".json,application/json" onChange={importGitChurnReport} />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGitChurnReport(null)
+                    setGitChurnReportName(null)
+                    setGitChurnReportError(null)
+                  }}
+                  disabled={!gitChurnReport}
+                >
+                  Clear churn
+                </button>
+              </div>
+              {gitChurnReportName && (
+                <p>
+                  <strong>Loaded:</strong> {gitChurnReportName}
+                </p>
+              )}
+              {gitChurnReport && (
+                <p>
+                  <strong>Since:</strong> {gitChurnReport.since} | <strong>Files:</strong> {gitChurnReport.files.length}
+                </p>
+              )}
+              {gitChurnReportError && <p className="error">{gitChurnReportError}</p>}
+              {churnHotFiles.length > 0 && (
+                <>
+                  <h2>Churn Hotspots</h2>
+                  <ul className="quick-action-list">
+                    {churnHotFiles.slice(0, 8).map((item) => (
+                      <li key={`churn-${item.path}`}>
+                        <code>{item.path}</code>
+                        <button type="button" className="quick-action-button" onClick={() => focusFileOnBoard(item.path)}>
+                          Show on Board
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+
+            <div className="section-card">
               <h2>Code Health (MVP)</h2>
               <p>
                 <strong>Hotspots:</strong> {hotspotFiles.length}
@@ -3104,6 +3252,16 @@ function App() {
                 {'\n\n'}
                 Refactor signals - re-export chains:
                 {reexportChains.length > 0 ? `\n${reexportChains.map((chain) => `- ${chain}`).join('\n')}` : '\n- no chains'}
+                {'\n\n'}
+                Git churn hotspots (weighted by centrality):
+                {churnHotFiles.length > 0
+                  ? `\n${churnHotFiles
+                      .map(
+                        (item) =>
+                          `- ${item.path} | weighted=${item.weighted} | churn=${item.churn} | commits=${item.commits} | centrality=${item.centrality}`,
+                      )
+                      .join('\n')}`
+                  : '\n- churn report not loaded'}
               </pre>
             </div>
 
