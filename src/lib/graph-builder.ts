@@ -14,6 +14,7 @@ const BLOCK_COLUMNS = 3
 
 export type GraphBuildMode = 'file-level' | 'inter-block'
 export type RoutingStyle = 'classic' | 'bus'
+export type FolderPackingMode = 'balanced' | 'dense'
 
 export type BuiltGraph = {
   nodes: Node[]
@@ -26,6 +27,7 @@ export type BuiltGraph = {
 type GraphOptions = {
   highlightCycles?: boolean
   routingStyle?: RoutingStyle
+  folderPacking?: FolderPackingMode
 }
 
 type ConnectionItem = {
@@ -96,41 +98,105 @@ function createTopLevelBlocks(project: ScannedProject) {
   return [...blockMap.values()].sort((left, right) => left.label.localeCompare(right.label))
 }
 
+type PackedItems = {
+  positions: Map<string, XYPosition>
+  contentWidth: number
+  contentHeight: number
+}
+
+type PackingItem = { id: string; width: number; height: number }
+
+function packRows(items: PackingItem[], targetWidth: number, gapX: number, gapY: number): PackedItems {
+  const rows: Array<{ items: PackingItem[]; widthUsed: number; height: number }> = []
+
+  for (const item of items) {
+    let bestRowIndex = -1
+    let bestRemaining = Number.POSITIVE_INFINITY
+
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index]
+      const nextWidth = row.widthUsed + (row.items.length > 0 ? gapX : 0) + item.width
+      if (nextWidth <= targetWidth) {
+        const remaining = targetWidth - nextWidth
+        if (remaining < bestRemaining) {
+          bestRemaining = remaining
+          bestRowIndex = index
+        }
+      }
+    }
+
+    if (bestRowIndex >= 0) {
+      const row = rows[bestRowIndex]
+      row.widthUsed += (row.items.length > 0 ? gapX : 0) + item.width
+      row.height = Math.max(row.height, item.height)
+      row.items.push(item)
+    } else {
+      rows.push({
+        items: [item],
+        widthUsed: item.width,
+        height: item.height,
+      })
+    }
+  }
+
+  const positions = new Map<string, XYPosition>()
+  let y = 0
+  let contentWidth = 0
+  for (const row of rows) {
+    let x = 0
+    for (const item of row.items) {
+      positions.set(item.id, { x, y })
+      x += item.width + gapX
+    }
+    contentWidth = Math.max(contentWidth, row.widthUsed)
+    y += row.height + gapY
+  }
+
+  const contentHeight = rows.length > 0 ? y - gapY : 0
+  return { positions, contentWidth, contentHeight }
+}
+
 function packItems(
   items: Array<{ id: string; width: number; height: number }>,
   gapX: number,
   gapY: number,
-) {
+  mode: FolderPackingMode = 'balanced',
+): PackedItems {
   const positions = new Map<string, XYPosition>()
   if (items.length === 0) {
     return { positions, contentWidth: 180, contentHeight: 40 }
   }
 
-  const totalArea = items.reduce((sum, item) => sum + (item.width + gapX) * (item.height + gapY), 0)
-  const maxWidth = items.reduce((max, item) => Math.max(max, item.width), 0)
-  const targetRowWidth = Math.max(maxWidth, Math.sqrt(totalArea) * 1.08)
+  const sortedItems =
+    mode === 'dense'
+      ? [...items].sort((left, right) => right.height - left.height || right.width - left.width || left.id.localeCompare(right.id))
+      : [...items]
 
-  let x = 0
-  let y = 0
-  let rowHeight = 0
-  let contentWidth = 0
+  const totalArea = sortedItems.reduce((sum, item) => sum + (item.width + gapX) * (item.height + gapY), 0)
+  const maxWidth = sortedItems.reduce((max, item) => Math.max(max, item.width), 0)
+  const sqrtWidth = Math.sqrt(totalArea)
+  const widthCandidates = [
+    Math.max(maxWidth, sqrtWidth * 0.92),
+    Math.max(maxWidth, sqrtWidth * 1.02),
+    Math.max(maxWidth, sqrtWidth * 1.12),
+    Math.max(maxWidth, sqrtWidth * 1.24),
+    Math.max(maxWidth, sqrtWidth * 1.38),
+  ]
 
-  for (const item of items) {
-    const shouldWrap = x > 0 && x + item.width > targetRowWidth
-    if (shouldWrap) {
-      x = 0
-      y += rowHeight + gapY
-      rowHeight = 0
+  let bestPacked: PackedItems | null = null
+  let bestScore = Number.POSITIVE_INFINITY
+  for (const candidateWidth of widthCandidates) {
+    const packed = packRows(sortedItems, candidateWidth, gapX, gapY)
+    const areaScore = packed.contentWidth * packed.contentHeight
+    const ratioPenalty = Math.abs(packed.contentWidth - packed.contentHeight) * (mode === 'dense' ? 0.18 : 0.32)
+    const score = areaScore + ratioPenalty * Math.sqrt(totalArea)
+    if (score < bestScore) {
+      bestScore = score
+      bestPacked = packed
     }
-
-    positions.set(item.id, { x, y })
-    x += item.width + gapX
-    rowHeight = Math.max(rowHeight, item.height)
-    contentWidth = Math.max(contentWidth, x - gapX)
   }
 
-  const contentHeight = y + rowHeight
-  return { positions, contentWidth, contentHeight }
+  return bestPacked ?? { positions, contentWidth: 180, contentHeight: 40 }
 }
 
 function collectHierarchicalFolders(project: ScannedProject) {
@@ -220,6 +286,7 @@ function createHierarchicalFileLevelNodes(
   dependencyGraph: DependencyGraph,
   cycleFileNodeIds: Set<string>,
   cycleFolderNodeIds: Set<string>,
+  folderPacking: FolderPackingMode,
 ) {
   const { folderById, topLevelFolderIds } = collectHierarchicalFolders(project)
   const fileAnalysisByPath = new Map(dependencyGraph.files.map((file) => [file.path, file]))
@@ -280,7 +347,9 @@ function createHierarchicalFileLevelNodes(
       height: FILE_NODE_HEIGHT,
     }))
     const items = [...folderItems, ...fileItems]
-    const packed = packItems(items, FILE_NODE_GAP_X, FILE_NODE_GAP_Y)
+    const gapX = folderPacking === 'dense' ? Math.max(10, FILE_NODE_GAP_X - 8) : FILE_NODE_GAP_X
+    const gapY = folderPacking === 'dense' ? Math.max(8, FILE_NODE_GAP_Y - 7) : FILE_NODE_GAP_Y
+    const packed = packItems(items, gapX, gapY, folderPacking)
 
     const width = Math.max(300, BLOCK_PADDING * 2 + packed.contentWidth)
     const contentTop = BLOCK_PADDING + BLOCK_HEADER_HEIGHT
@@ -310,7 +379,9 @@ function createHierarchicalFileLevelNodes(
       height: layout?.height ?? 180,
     }
   })
-  const topPacked = packItems(topItems, BLOCK_GAP_X, BLOCK_GAP_Y)
+  const topGapX = folderPacking === 'dense' ? Math.max(14, BLOCK_GAP_X - 8) : BLOCK_GAP_X
+  const topGapY = folderPacking === 'dense' ? Math.max(14, BLOCK_GAP_Y - 8) : BLOCK_GAP_Y
+  const topPacked = packItems(topItems, topGapX, topGapY, folderPacking)
   const topLevelPositionById = topPacked.positions
 
   const nodes: Node[] = []
@@ -692,6 +763,7 @@ export function buildDependencyFlowGraph(
 ): BuiltGraph {
   const highlightCycles = options.highlightCycles ?? false
   const routingStyle = options.routingStyle ?? 'classic'
+  const folderPacking = options.folderPacking ?? 'balanced'
   const fileEdgesRaw = dependencyGraph.edges.map((edge) => ({
     source: `file:${edge.fromPath}`,
     target: `file:${edge.toPath}`,
@@ -726,6 +798,7 @@ export function buildDependencyFlowGraph(
       dependencyGraph,
       fileCycles.cycleNodeIds,
       cycleFolderNodeIds,
+      folderPacking,
     )
     return {
       nodes: hierarchical.nodes,

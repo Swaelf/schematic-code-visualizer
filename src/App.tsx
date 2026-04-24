@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Background, Controls, MiniMap, ReactFlow, type Edge, type NodeMouseHandler } from '@xyflow/react'
 import { BusEdge } from './components/BusEdge'
+import { CanvasPanPanel } from './components/CanvasPanPanel'
 import { ChipFileNode } from './components/ChipFileNode'
 import { FolderBlockNode } from './components/FolderBlockNode'
 import { analyzeProjectDependenciesInWorker } from './lib/analyzer-worker-client'
 import { applyElkToBlockNodes } from './lib/elk-layout'
-import { buildDependencyFlowGraph, type GraphBuildMode, type RoutingStyle } from './lib/graph-builder'
+import {
+  buildDependencyFlowGraph,
+  type FolderPackingMode,
+  type GraphBuildMode,
+  type RoutingStyle,
+} from './lib/graph-builder'
 import type { DependencyGraph, FileAnalysis, ScannedProject } from './lib/models'
 import { scanProjectFolder } from './lib/scanner'
 import { readTsConfigAliasConfig } from './lib/tsconfig-reader'
@@ -23,6 +29,7 @@ function App() {
   const [graphMode, setGraphMode] = useState<GraphBuildMode>('file-level')
   const [routingStyle, setRoutingStyle] = useState<RoutingStyle>('classic')
   const [busDisplayMode, setBusDisplayMode] = useState<BusDisplayMode>('detailed')
+  const [folderPacking, setFolderPacking] = useState<FolderPackingMode>('balanced')
   const [highlightCycles, setHighlightCycles] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [directionFilter, setDirectionFilter] = useState<'all' | 'incoming' | 'outgoing'>('all')
@@ -66,8 +73,12 @@ function App() {
     if (!scanResult || !dependencyGraph) {
       return null
     }
-    return buildDependencyFlowGraph(scanResult, dependencyGraph, graphMode, { highlightCycles, routingStyle })
-  }, [scanResult, dependencyGraph, graphMode, highlightCycles, routingStyle])
+    return buildDependencyFlowGraph(scanResult, dependencyGraph, graphMode, {
+      highlightCycles,
+      routingStyle,
+      folderPacking,
+    })
+  }, [scanResult, dependencyGraph, graphMode, highlightCycles, routingStyle, folderPacking])
 
   const fileNodeToBlockId = useMemo(() => {
     const map = new Map<string, string>()
@@ -221,6 +232,7 @@ function App() {
   ])
 
   const displayEdges = useMemo<Edge[]>(() => {
+    const edgeRenderToken = `${routingStyle}|${busDisplayMode}|${selectedNodeId ?? 'none'}|${directionFilter}`
     const nodeById = new Map(visibleNodes.map((node) => [node.id, node]))
     const parentById = new Map<string, string>()
     for (const node of visibleNodes) {
@@ -528,6 +540,7 @@ function App() {
 
       const baseEdge: Edge = {
         ...edge,
+        id: `${edge.id}::${edgeRenderToken}`,
         type: routingStyle === 'bus' ? 'bus' : edge.type,
         style: {
           ...(edge.style ?? {}),
@@ -585,6 +598,7 @@ function App() {
           isPairPrimary: bus.isPairPrimary,
           pairKey: bus.pairKey,
           pairCount: bus.pairMeta?.count ?? 1,
+          highlightedSegmentIds: [],
         },
       })
     }
@@ -615,7 +629,7 @@ function App() {
         },
       }
     })
-  }, [visibleEdges, visibleNodes, fileNodeToBlockId, flowGraph, hiddenNodeIds, routingStyle, busDisplayMode, selectedNodeId])
+  }, [visibleEdges, visibleNodes, fileNodeToBlockId, flowGraph, hiddenNodeIds, routingStyle, busDisplayMode, selectedNodeId, directionFilter])
 
 
   useEffect(() => {
@@ -665,6 +679,11 @@ function App() {
     setHoveredFilePath(null)
     setActiveTab('overview')
   }, [graphMode, scanResult?.rootName])
+
+  useEffect(() => {
+    setSelectedNodeId(null)
+    setDirectionFilter('all')
+  }, [routingStyle, busDisplayMode, folderPacking])
 
   async function handlePickDirectory() {
     if (!isPickerAvailable) {
@@ -749,6 +768,7 @@ function App() {
         hoveredFileAnalysis.exports.length > 0 ? hoveredFileAnalysis.exports.join(', ') : 'none'
       }`
     : (hoveredFilePath ?? '-')
+  const selectedInfoLine = selectedNodeId ?? '-'
 
   function toggleSelectedBlockCollapse() {
     if (!selectedBlockId || graphMode !== 'file-level') {
@@ -1047,6 +1067,17 @@ function App() {
                 <option value="trunk-only">trunk-only</option>
               </select>
             </label>
+            <label className="toggle-row">
+              Folder packing
+              <select
+                value={folderPacking}
+                onChange={(event) => setFolderPacking(event.target.value as FolderPackingMode)}
+                disabled={graphMode !== 'file-level'}
+              >
+                <option value="balanced">balanced</option>
+                <option value="dense">dense</option>
+              </select>
+            </label>
             <label className="toggle-row search-row">
               Search file
               <input
@@ -1133,10 +1164,10 @@ function App() {
                 {' | '}Cycles: {flowGraph.cycleEdgeCount}
                 {' | '}Matches: {matchingFileNodeIds.size}
                 {isLayouting ? ' | Layout: running...' : ' | Layout: ELK ready'}
-                {selectedNodeId ? ` | Selected: ${selectedNodeId}` : ''}
               </p>
               <div className="canvas-shell">
                 <ReactFlow
+                  key={`rf-${graphMode}-${routingStyle}-${busDisplayMode}-${folderPacking}`}
                   nodes={visibleNodes}
                   edges={displayEdges}
                   nodeTypes={nodeTypes}
@@ -1152,11 +1183,22 @@ function App() {
                   minZoom={0.1}
                   maxZoom={1.5}
                 >
-                  <MiniMap />
+                  <MiniMap
+                    position="bottom-right"
+                    pannable
+                    zoomable
+                    nodeColor="#335f82"
+                    bgColor="rgba(4, 16, 29, 0.92)"
+                    maskColor="rgba(2, 9, 16, 0.72)"
+                  />
                   <Controls />
+                  <CanvasPanPanel />
                   <Background gap={24} size={1} color="#3a6689" />
                 </ReactFlow>
               </div>
+              <p className="canvas-selected-strip" title={selectedInfoLine}>
+                Selected: <span className="canvas-selected-value">{selectedInfoLine}</span>
+              </p>
               <p className="canvas-hover-strip" title={hoverInfoLine}>
                 Hover: <span className="canvas-hover-value">{hoverInfoLine}</span>
               </p>

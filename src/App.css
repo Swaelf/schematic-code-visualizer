@@ -238,6 +238,23 @@ button:disabled {
   min-width: 0;
 }
 
+.canvas-selected-strip {
+  margin: 8px 0 0;
+  color: #b7d4ea;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.canvas-selected-value {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .canvas-hover-value {
   min-width: 0;
   flex: 1 1 auto;
@@ -250,6 +267,67 @@ button:disabled {
   font-size: 0.78rem;
   font-weight: 700;
   color: #e3f1fb;
+}
+
+.react-flow__minimap {
+  border: 1px solid rgba(100, 150, 188, 0.45);
+  border-radius: 10px;
+  box-shadow: 0 8px 20px rgba(3, 9, 18, 0.5);
+  overflow: hidden;
+}
+
+.react-flow__minimap-mask {
+  fill: rgba(2, 9, 16, 0.72);
+}
+
+.react-flow__controls {
+  box-shadow: 0 8px 18px rgba(3, 9, 18, 0.45);
+  border: 1px solid rgba(100, 150, 188, 0.4);
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(5, 21, 36, 0.92);
+}
+
+.react-flow__controls button {
+  background: rgba(12, 42, 68, 0.95);
+  color: #dff1ff;
+  border: none;
+  border-bottom: 1px solid rgba(98, 148, 186, 0.35);
+  width: 34px;
+  height: 34px;
+}
+
+.react-flow__controls button:hover {
+  background: rgba(23, 70, 107, 0.98);
+}
+
+.react-flow__controls button svg {
+  fill: #dff1ff;
+}
+
+.pan-panel {
+  display: grid;
+  grid-template-columns: repeat(2, 34px);
+  gap: 6px;
+  margin-left: 6px;
+  margin-bottom: 6px;
+}
+
+.pan-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid rgba(104, 152, 190, 0.45);
+  background: rgba(11, 42, 66, 0.94);
+  color: #e3f5ff;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0;
+}
+
+.pan-btn:hover {
+  background: rgba(26, 77, 113, 0.98);
 }
 
 .react-flow__edge-textbg {
