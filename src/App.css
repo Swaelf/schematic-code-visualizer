@@ -1,0 +1,98 @@
+.app-shell {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.panel {
+  background: rgba(8, 25, 45, 0.82);
+  border: 1px solid rgba(109, 155, 198, 0.35);
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: 0 10px 30px rgba(6, 17, 30, 0.35);
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: clamp(1.4rem, 2.8vw, 2.2rem);
+}
+
+h2 {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+
+.subtitle {
+  margin: 0;
+  color: #b4cce4;
+}
+
+.actions {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+button {
+  border: 1px solid #2f8fcb;
+  border-radius: 10px;
+  color: #e1f6ff;
+  background: linear-gradient(180deg, #145b86, #0f3d5d);
+  padding: 10px 16px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+.hint {
+  color: #8fb9d8;
+  font-size: 0.92rem;
+}
+
+.error {
+  margin-top: 12px;
+  color: #ffc3c3;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(230px, 300px) 1fr;
+  gap: 16px;
+}
+
+.stats p {
+  margin: 8px 0;
+  color: #b7d4ea;
+}
+
+.tree pre {
+  margin: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(110, 152, 190, 0.4);
+  background: rgba(4, 13, 24, 0.85);
+  color: #d7ebfb;
+  padding: 12px;
+  max-height: 60vh;
+  overflow: auto;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    padding: 12px;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
