@@ -17,6 +17,7 @@ Web app for the first iteration of your idea: scan a local TypeScript project an
 - Cycle detection and highlight mode.
 - Direction filters (`all`, `incoming`, `outgoing`) for selected node.
 - `tsconfig.json` alias resolution (`baseUrl` + `paths`) for import links.
+- Dependency analysis runs in a Web Worker to keep UI responsive.
 
 ## Tech Stack
 
@@ -44,4 +45,4 @@ For folder selection, use a Chromium-based browser (Chrome/Edge) because this MV
 
 ## Next Planned Steps
 
-- Reduce bundle size (move heavy analysis code to Web Worker / split chunks).
+- Reduce bundle size further (code-split TypeScript/ELK heavy paths).

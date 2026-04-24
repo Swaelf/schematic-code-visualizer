@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Background, Controls, MiniMap, ReactFlow, type NodeMouseHandler } from '@xyflow/react'
-import { analyzeProjectDependencies } from './lib/analyzer'
+import { analyzeProjectDependenciesInWorker } from './lib/analyzer-worker-client'
 import { applyElkToBlockNodes } from './lib/elk-layout'
 import { buildDependencyFlowGraph, type GraphBuildMode } from './lib/graph-builder'
 import type { DependencyGraph, ScannedProject } from './lib/models'
@@ -20,6 +20,7 @@ function App() {
   const [layoutedNodes, setLayoutedNodes] = useState<ReturnType<typeof buildDependencyFlowGraph>['nodes']>([])
   const [isLayouting, setIsLayouting] = useState(false)
   const [isScanning, setIsScanning] = useState(false)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const treeLines = useMemo(() => buildTreeLines(scanResult?.tree ?? null), [scanResult])
 
@@ -145,6 +146,7 @@ function App() {
     }
 
     setIsScanning(true)
+    setIsAnalyzing(false)
     setErrorMessage(null)
 
     try {
@@ -154,20 +156,21 @@ function App() {
       const scannedProject = await scanProjectFolder(directoryHandle)
       const tsconfigAliases = await readTsConfigAliasConfig(directoryHandle)
       setScanResult(scannedProject)
-      setDependencyGraph(
-        analyzeProjectDependencies(scannedProject.files, {
-          rootName: scannedProject.rootName,
-          tsconfigAliases,
-        }),
-      )
+      setIsAnalyzing(true)
+      const graph = await analyzeProjectDependenciesInWorker(scannedProject.files, {
+        rootName: scannedProject.rootName,
+        tsconfigAliases,
+      })
+      setDependencyGraph(graph)
     } catch (error) {
       if ((error as DOMException).name === 'AbortError') {
         return
       }
-      setErrorMessage('Failed to scan the selected directory.')
+      setErrorMessage('Failed to scan or analyze the selected directory.')
       console.error(error)
     } finally {
       setIsScanning(false)
+      setIsAnalyzing(false)
     }
   }
 
@@ -179,6 +182,18 @@ function App() {
     setSelectedNodeId(node.id)
   }
 
+  const isBusy = isScanning || isAnalyzing
+
+  function pickButtonLabel() {
+    if (isScanning) {
+      return 'Scanning files...'
+    }
+    if (isAnalyzing) {
+      return 'Analyzing dependencies...'
+    }
+    return 'Select Project Folder'
+  }
+
   return (
     <main className="app-shell">
       <section className="panel">
@@ -187,8 +202,8 @@ function App() {
           Iteration v1 scans TypeScript files and maps directory structure into logical board blocks.
         </p>
         <div className="actions">
-          <button type="button" onClick={handlePickDirectory} disabled={isScanning}>
-            {isScanning ? 'Scanning...' : 'Select Project Folder'}
+          <button type="button" onClick={handlePickDirectory} disabled={isBusy}>
+            {pickButtonLabel()}
           </button>
           <span className="hint">Supported: `.ts`, `.tsx`; excludes `node_modules`, `.git`, `dist`, `build`.</span>
         </div>

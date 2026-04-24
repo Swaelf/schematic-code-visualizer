@@ -1,4 +1,3 @@
-import ts from 'typescript'
 import type { TsConfigAliasConfig } from './models'
 
 type TsConfigRoot = {
@@ -15,12 +14,7 @@ export async function readTsConfigAliasConfig(
     const tsconfigHandle = await directoryHandle.getFileHandle('tsconfig.json')
     const file = await tsconfigHandle.getFile()
     const text = await file.text()
-    const parsed = ts.parseConfigFileTextToJson('tsconfig.json', text)
-    if (parsed.error || !parsed.config) {
-      return null
-    }
-
-    const config = parsed.config as TsConfigRoot
+    const config = JSON.parse(text) as TsConfigRoot
     const compilerOptions = config.compilerOptions ?? {}
     const hasBaseUrl = typeof compilerOptions.baseUrl === 'string' && compilerOptions.baseUrl.length > 0
     const hasPaths = !!compilerOptions.paths && Object.keys(compilerOptions.paths).length > 0
