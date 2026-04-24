@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Background, Controls, MiniMap, ReactFlow, type NodeMouseHandler } from '@xyflow/react'
+import { ChipFileNode } from './components/ChipFileNode'
 import { analyzeProjectDependenciesInWorker } from './lib/analyzer-worker-client'
 import { applyElkToBlockNodes } from './lib/elk-layout'
 import { buildDependencyFlowGraph, type GraphBuildMode } from './lib/graph-builder'
@@ -29,6 +30,7 @@ function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const treeLines = useMemo(() => buildTreeLines(scanResult?.tree ?? null), [scanResult])
+  const nodeTypes = useMemo(() => ({ chipFile: ChipFileNode }), [])
 
   const isPickerAvailable = typeof window !== 'undefined' && 'showDirectoryPicker' in window
 
@@ -534,6 +536,16 @@ function App() {
               Clear selection
             </button>
           </div>
+          <div className="board-legend">
+            <span className="legend-item">
+              <span className="legend-swatch legend-swatch-import" />
+              Imports (flow)
+            </span>
+            <span className="legend-item">
+              <span className="legend-swatch legend-swatch-export" />
+              Exports (arrow/pins)
+            </span>
+          </div>
           {flowGraph ? (
             <>
               <p className="canvas-meta">
@@ -553,6 +565,7 @@ function App() {
                 <ReactFlow
                   nodes={visibleNodes}
                   edges={visibleEdges}
+                  nodeTypes={nodeTypes}
                   onNodeClick={onNodeClick}
                   onNodeMouseEnter={onNodeMouseEnter}
                   onNodeMouseLeave={onNodeMouseLeave}

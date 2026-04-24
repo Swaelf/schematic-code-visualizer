@@ -1,9 +1,9 @@
-import type { Edge, Node } from '@xyflow/react'
+import { Position, type Edge, type Node } from '@xyflow/react'
 import type { DependencyGraph, ScannedProject } from './models'
 
 const BLOCK_HEADER_HEIGHT = 38
-const FILE_NODE_WIDTH = 210
-const FILE_NODE_HEIGHT = 44
+const FILE_NODE_WIDTH = 240
+const FILE_NODE_HEIGHT = 90
 const FILE_NODE_GAP_X = 16
 const FILE_NODE_GAP_Y = 12
 const BLOCK_PADDING = 14
@@ -71,11 +71,13 @@ function createBlocks(project: ScannedProject) {
 function createNodes(
   blocks: BlockInfo[],
   project: ScannedProject,
+  dependencyGraph: DependencyGraph,
   cycleFileNodeIds: Set<string>,
   cycleBlockNodeIds: Set<string>,
 ) {
   const nodes: Node[] = []
   const fileNodeToBlock = new Map<string, string>()
+  const fileAnalysisByPath = new Map(dependencyGraph.files.map((file) => [file.path, file]))
 
   blocks.forEach((block, blockIndex) => {
     const col = blockIndex % BLOCK_COLUMNS
@@ -114,17 +116,24 @@ function createNodes(
       const fileRow = Math.floor(fileIndex / filesPerRow)
       const relativeLabel = getRelativePath(filePath, project.rootName)
       const fileName = relativeLabel.split('/').at(-1) ?? relativeLabel
+      const analysis = fileAnalysisByPath.get(filePath)
 
       nodes.push({
         id: `file:${filePath}`,
+        type: 'chipFile',
         parentId: block.id,
         extent: 'parent',
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
         position: {
           x: BLOCK_PADDING + fileCol * (FILE_NODE_WIDTH + FILE_NODE_GAP_X),
           y: BLOCK_PADDING + BLOCK_HEADER_HEIGHT + fileRow * (FILE_NODE_HEIGHT + FILE_NODE_GAP_Y),
         },
         data: {
           label: fileName,
+          path: relativeLabel,
+          importCount: analysis?.imports.length ?? 0,
+          exportCount: analysis?.exports.length ?? 0,
         },
         style: {
           width: FILE_NODE_WIDTH,
@@ -159,9 +168,10 @@ function createFileEdges(
     source: `file:${edge.fromPath}`,
     target: `file:${edge.toPath}`,
     animated: false,
+    markerEnd: { type: 'arrowclosed', color: '#f5b04d' },
     style: cycleEdgeKeys.has(`${edge.fromPath}->${edge.toPath}`) && highlightCycles
       ? { stroke: '#ff9898', strokeWidth: 2.4 }
-      : { stroke: '#a4c8e2', strokeWidth: 1.2 },
+      : { stroke: '#6fdc9a', strokeWidth: 1.6 },
   }))
 }
 
@@ -199,11 +209,11 @@ function createInterBlockEdges(items: ConnectionItem[], cycleEdgeKeys: Set<strin
     source: item.source,
     target: item.target,
     label: String(item.count),
-    markerEnd: { type: 'arrowclosed', color: '#f5c16e' },
+    markerEnd: { type: 'arrowclosed', color: '#f5b04d' },
     style: cycleEdgeKeys.has(`${item.source}->${item.target}`) && highlightCycles
       ? { stroke: '#ff9898', strokeWidth: Math.min(3 + item.count * 0.2, 7) }
-      : { stroke: '#f5c16e', strokeWidth: Math.min(2 + item.count * 0.15, 6) },
-    labelStyle: { fill: '#ffe1a8', fontSize: 12, fontWeight: 600 },
+      : { stroke: '#6fdc9a', strokeWidth: Math.min(2 + item.count * 0.15, 6) },
+    labelStyle: { fill: '#b9f7cf', fontSize: 12, fontWeight: 600 },
   }))
 }
 
@@ -315,7 +325,13 @@ export function buildDependencyFlowGraph(
     }
   }
 
-  const { nodes, fileNodeToBlock } = createNodes(blocks, project, fileCycles.cycleNodeIds, cycleBlockNodeIds)
+  const { nodes, fileNodeToBlock } = createNodes(
+    blocks,
+    project,
+    dependencyGraph,
+    fileCycles.cycleNodeIds,
+    cycleBlockNodeIds,
+  )
   const interBlockConnections = collectInterBlockConnections(dependencyGraph, fileNodeToBlock)
   const blockCycles = detectCycleNodeIds(
     blocks.map((block) => block.id),
