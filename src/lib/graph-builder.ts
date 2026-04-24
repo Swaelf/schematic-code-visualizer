@@ -17,6 +17,7 @@ export type BuiltGraph = {
   nodes: Node[]
   edges: Edge[]
   blockCount: number
+  blockLayoutEdges: Array<{ source: string; target: string }>
 }
 
 type BlockInfo = {
@@ -58,7 +59,6 @@ function createBlocks(project: ScannedProject) {
 
 function createNodes(blocks: BlockInfo[], project: ScannedProject) {
   const nodes: Node[] = []
-  const blockNodeIndex = new Map<string, Node>()
   const fileNodeToBlock = new Map<string, string>()
 
   blocks.forEach((block, blockIndex) => {
@@ -92,7 +92,6 @@ function createNodes(blocks: BlockInfo[], project: ScannedProject) {
     }
 
     nodes.push(blockNode)
-    blockNodeIndex.set(block.id, blockNode)
 
     files.forEach((filePath, fileIndex) => {
       const fileCol = fileIndex % filesPerRow
@@ -131,7 +130,7 @@ function createNodes(blocks: BlockInfo[], project: ScannedProject) {
     })
   })
 
-  return { nodes, fileNodeToBlock, blockNodeIndex }
+  return { nodes, fileNodeToBlock }
 }
 
 function createFileEdges(dependencyGraph: DependencyGraph): Edge[] {
@@ -144,7 +143,10 @@ function createFileEdges(dependencyGraph: DependencyGraph): Edge[] {
   }))
 }
 
-function createInterBlockEdges(dependencyGraph: DependencyGraph, fileNodeToBlock: Map<string, string>): Edge[] {
+function collectInterBlockConnections(
+  dependencyGraph: DependencyGraph,
+  fileNodeToBlock: Map<string, string>,
+) {
   const edgeCountByBlockPair = new Map<string, { source: string; target: string; count: number }>()
 
   for (const edge of dependencyGraph.edges) {
@@ -166,7 +168,11 @@ function createInterBlockEdges(dependencyGraph: DependencyGraph, fileNodeToBlock
     }
   }
 
-  return [...edgeCountByBlockPair.values()].map((item) => ({
+  return [...edgeCountByBlockPair.values()]
+}
+
+function createInterBlockEdges(items: Array<{ source: string; target: string; count: number }>): Edge[] {
+  return items.map((item) => ({
     id: `edge:block:${item.source}->${item.target}`,
     source: item.source,
     target: item.target,
@@ -184,11 +190,16 @@ export function buildDependencyFlowGraph(
 ): BuiltGraph {
   const blocks = createBlocks(project)
   const { nodes, fileNodeToBlock } = createNodes(blocks, project)
-  const edges = mode === 'inter-block' ? createInterBlockEdges(dependencyGraph, fileNodeToBlock) : createFileEdges(dependencyGraph)
+  const interBlockConnections = collectInterBlockConnections(dependencyGraph, fileNodeToBlock)
+  const edges = mode === 'inter-block' ? createInterBlockEdges(interBlockConnections) : createFileEdges(dependencyGraph)
 
   return {
     nodes,
     edges,
     blockCount: blocks.length,
+    blockLayoutEdges: interBlockConnections.map((connection) => ({
+      source: connection.source,
+      target: connection.target,
+    })),
   }
 }

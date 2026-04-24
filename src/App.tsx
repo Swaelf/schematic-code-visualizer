@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Background, Controls, MiniMap, ReactFlow } from '@xyflow/react'
 import { analyzeProjectDependencies } from './lib/analyzer'
+import { applyElkToBlockNodes } from './lib/elk-layout'
 import { buildDependencyFlowGraph, type GraphBuildMode } from './lib/graph-builder'
 import type { DependencyGraph, ScannedProject } from './lib/models'
 import { scanProjectFolder } from './lib/scanner'
@@ -12,6 +13,8 @@ function App() {
   const [scanResult, setScanResult] = useState<ScannedProject | null>(null)
   const [dependencyGraph, setDependencyGraph] = useState<DependencyGraph | null>(null)
   const [graphMode, setGraphMode] = useState<GraphBuildMode>('file-level')
+  const [layoutedNodes, setLayoutedNodes] = useState<ReturnType<typeof buildDependencyFlowGraph>['nodes']>([])
+  const [isLayouting, setIsLayouting] = useState(false)
   const [isScanning, setIsScanning] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const treeLines = useMemo(() => buildTreeLines(scanResult?.tree ?? null), [scanResult])
@@ -38,6 +41,40 @@ function App() {
     }
     return buildDependencyFlowGraph(scanResult, dependencyGraph, graphMode)
   }, [scanResult, dependencyGraph, graphMode])
+
+  useEffect(() => {
+    let isCancelled = false
+
+    async function runLayout() {
+      if (!flowGraph) {
+        setLayoutedNodes([])
+        return
+      }
+
+      setLayoutedNodes(flowGraph.nodes)
+      setIsLayouting(true)
+      try {
+        const nextNodes = await applyElkToBlockNodes(flowGraph.nodes, flowGraph.blockLayoutEdges)
+        if (!isCancelled) {
+          setLayoutedNodes(nextNodes)
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setLayoutedNodes(flowGraph.nodes)
+          console.error('ELK layout failed, using fallback positions.', error)
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsLayouting(false)
+        }
+      }
+    }
+
+    runLayout()
+    return () => {
+      isCancelled = true
+    }
+  }, [flowGraph])
 
   async function handlePickDirectory() {
     if (!isPickerAvailable) {
@@ -156,9 +193,10 @@ function App() {
           <>
             <p className="canvas-meta">
               Blocks: {flowGraph.blockCount}, Nodes: {flowGraph.nodes.length}, Edges: {flowGraph.edges.length}
+              {isLayouting ? ' | Layout: running...' : ' | Layout: ELK ready'}
             </p>
             <div className="canvas-shell">
-              <ReactFlow nodes={flowGraph.nodes} edges={flowGraph.edges} fitView minZoom={0.1} maxZoom={1.5}>
+              <ReactFlow nodes={layoutedNodes} edges={flowGraph.edges} fitView minZoom={0.1} maxZoom={1.5}>
                 <MiniMap />
                 <Controls />
                 <Background gap={24} size={1} color="#3a6689" />
