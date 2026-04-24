@@ -1,4 +1,8 @@
-﻿# Schematic Code Visualizer — Plan (MVP v1)
+# Schematic Code Visualizer - Plan (MVP v1)
+
+## Status
+- MVP status: **Completed** (2026-04-24)
+- Smoke report: `SMOKE_RESULTS.md`
 
 ## Goal
 Build a web app that analyzes a selected TypeScript project folder and visualizes file structure and import/export relationships as an electronic-style schematic.
@@ -46,7 +50,7 @@ Build a web app that analyzes a selected TypeScript project folder and visualize
 
 ## Layout Rules for Logical Blocks
 - Top-level directories under `src` become primary blocks.
-- Nested directories become sub-blocks (max depth 2–3 in MVP).
+- Nested directories become sub-blocks (max depth 2-3 in MVP).
 - Intra-block edges are light and thin.
 - Inter-block edges are thicker and higher contrast.
 - Many edges between two blocks can be bundled into one channel with a counter.
@@ -77,15 +81,15 @@ Build a web app that analyzes a selected TypeScript project folder and visualize
 - `typescript`
 
 ## Implementation Roadmap
-1. Project scaffold (Vite + React + TS).
-2. Folder picker + scanner.
-3. TS analyzer (imports/exports extraction).
-4. Graph generation (file nodes + edges).
-5. Block clustering by directories.
-6. ELK layout integration.
-7. PCB-style rendering + interactions.
-8. Filters/search/cycle highlighting.
-9. Smoke test on 2–3 TS repos.
+1. Project scaffold (Vite + React + TS). ✅
+2. Folder picker + scanner. ✅
+3. TS analyzer (imports/exports extraction). ✅
+4. Graph generation (file nodes + edges). ✅
+5. Block clustering by directories. ✅
+6. ELK layout integration. ✅
+7. PCB-style rendering + interactions. ✅
+8. Filters/search/cycle highlighting. ✅
+9. Smoke test on 2-3 TS repos. ✅
 
 ## Risks and Decisions
 - Browser support for folder API is limited (best in Chromium).
@@ -97,3 +101,7 @@ Build a web app that analyzes a selected TypeScript project folder and visualize
 - App renders file components grouped by directory blocks.
 - Import/export relations are visible and navigable.
 - Inter-block architecture can be inspected clearly.
+
+## Post-MVP Focus
+- Improve resolver for repo-specific internal unresolved patterns.
+- Continue UI polish (readability, interaction ergonomics, visual hierarchy).
