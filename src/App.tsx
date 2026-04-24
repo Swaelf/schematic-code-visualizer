@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
 import { Background, MiniMap, ReactFlow, type Edge, type NodeMouseHandler } from '@xyflow/react'
 import { BusEdge } from './components/BusEdge'
 import { ClassicEdge } from './components/ClassicEdge'
@@ -44,6 +44,108 @@ type ArchitectureViolation = {
   fromLayer: ArchitectureLayerId
   toLayer: ArchitectureLayerId
   kind: DependencyEdge['kind']
+}
+type AnalysisExportReport = {
+  generatedAt: string
+  projectRoot: string | null
+  summary: {
+    tsFiles: number
+    directories: number
+    dependencyEdges: number
+    cycleEdges: number
+    unresolvedImports: number
+    unresolvedInternal: number
+    unresolvedExternal: number
+    aliasResolved: number
+  }
+  edgeKinds: Record<DependencyEdge['kind'], number>
+  codeHealth: {
+    hotspots: Array<{ path: string; score: number; incoming: number; outgoing: number; loc: number }>
+    deadExports: Array<{ path: string; exportCount: number; exports: string[] }>
+    cycleGroups: Array<{ id: number; size: number; files: string[] }>
+  }
+  risk: {
+    files: Array<{
+      path: string
+      score: number
+      incomingRuntime: number
+      outgoingRuntime: number
+      incomingType: number
+      outgoingType: number
+      incomingReexport: number
+      outgoingReexport: number
+    }>
+    blocks: Array<{
+      label: string
+      score: number
+      fileCount: number
+      incomingCrossBlockRuntime: number
+      outgoingCrossBlockRuntime: number
+    }>
+  }
+  refactorSignals: {
+    orphanRuntimeModules: Array<{
+      path: string
+      exports: number
+      typeTouches: number
+      reexportTouches: number
+    }>
+    reexportHubs: Array<{
+      path: string
+      outgoingReexport: number
+      incomingRuntime: number
+      exports: number
+    }>
+    duplicateUtilityGroups: Array<{
+      baseName: string
+      hash: string
+      paths: string[]
+    }>
+    reexportBottlenecks: Array<{
+      path: string
+      score: number
+      incomingRuntime: number
+      incomingReexport: number
+      outgoingReexport: number
+    }>
+    reexportChains: string[]
+  }
+  architecture: {
+    rules: string[]
+    layerDistribution: Record<ArchitectureLayerId, number>
+    violationsByKind: Record<DependencyEdge['kind'], number>
+    violationsByLayerPair: Array<{ pair: string; count: number }>
+    violations: Array<{
+      kind: DependencyEdge['kind']
+      fromLayer: ArchitectureLayerId
+      toLayer: ArchitectureLayerId
+      fromPath: string
+      toPath: string
+    }>
+  }
+  graphSnapshot?: {
+    files: string[]
+    edges: Array<{
+      fromPath: string
+      toPath: string
+      kind: DependencyEdge['kind']
+    }>
+  }
+}
+type ArchitectureExportReport = {
+  generatedAt: string
+  projectRoot: string | null
+  rules: string[]
+  layerDistribution: Record<ArchitectureLayerId, number>
+  violationsByKind: Record<DependencyEdge['kind'], number>
+  violationsByLayerPair: Array<{ pair: string; count: number }>
+  violations: Array<{
+    kind: DependencyEdge['kind']
+    fromLayer: ArchitectureLayerId
+    toLayer: ArchitectureLayerId
+    fromPath: string
+    toPath: string
+  }>
 }
 type ArchitectureConfig = {
   layerMatchers: Record<ArchitectureLayerId, string[]>
@@ -224,6 +326,254 @@ function findTopCycleGroups(filePaths: string[], edges: Array<{ fromPath: string
   return groups.sort((left, right) => right.size - left.size || left.id - right.id).slice(0, limit)
 }
 
+function downloadTextFile(fileName: string, content: string, mimeType: string) {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return
+  }
+  const blob = new Blob([content], { type: mimeType })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = fileName
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}
+
+function hashText(input: string) {
+  let hash = 5381
+  for (let index = 0; index < input.length; index += 1) {
+    hash = (hash * 33) ^ input.charCodeAt(index)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+function buildMarkdownReport(report: AnalysisExportReport) {
+  const lines: string[] = []
+  lines.push('# Schematic Code Visualizer Report')
+  lines.push('')
+  lines.push(`- Generated: ${report.generatedAt}`)
+  lines.push(`- Project: ${report.projectRoot ?? '-'}`)
+  lines.push('')
+  lines.push('## Summary')
+  lines.push(`- TS files: ${report.summary.tsFiles}`)
+  lines.push(`- Directories: ${report.summary.directories}`)
+  lines.push(`- Dependency edges: ${report.summary.dependencyEdges}`)
+  lines.push(`- Cycle edges: ${report.summary.cycleEdges}`)
+  lines.push(`- Unresolved imports: ${report.summary.unresolvedImports}`)
+  lines.push(`- Unresolved internal: ${report.summary.unresolvedInternal}`)
+  lines.push(`- Unresolved external: ${report.summary.unresolvedExternal}`)
+  lines.push(`- Alias resolved: ${report.summary.aliasResolved}`)
+  lines.push('')
+  lines.push('## Edge Kinds')
+  lines.push(`- runtime: ${report.edgeKinds.runtime}`)
+  lines.push(`- type: ${report.edgeKinds.type}`)
+  lines.push(`- re-export: ${report.edgeKinds['re-export']}`)
+  lines.push('')
+  lines.push('## Code Health')
+  lines.push('### Hotspots')
+  if (report.codeHealth.hotspots.length === 0) {
+    lines.push('- none')
+  } else {
+    for (const item of report.codeHealth.hotspots) {
+      lines.push(`- ${item.path} | score=${item.score} | in=${item.incoming} | out=${item.outgoing} | loc=${item.loc}`)
+    }
+  }
+  lines.push('')
+  lines.push('### Potential Dead Exports')
+  if (report.codeHealth.deadExports.length === 0) {
+    lines.push('- none')
+  } else {
+    for (const item of report.codeHealth.deadExports) {
+      lines.push(`- ${item.path} | exports=${item.exportCount} | symbols=${item.exports.join(', ')}`)
+    }
+  }
+  lines.push('')
+  lines.push('### Cycle Groups')
+  if (report.codeHealth.cycleGroups.length === 0) {
+    lines.push('- none')
+  } else {
+    for (const item of report.codeHealth.cycleGroups) {
+      lines.push(`- cycle-${item.id} | size=${item.size} | ${item.files.join(' -> ')}`)
+    }
+  }
+  lines.push('')
+  lines.push('## Risk')
+  lines.push('### File Risk')
+  if (report.risk.files.length === 0) {
+    lines.push('- none')
+  } else {
+    for (const item of report.risk.files) {
+      lines.push(
+        `- ${item.path} | score=${item.score} | runtime ${item.incomingRuntime}/${item.outgoingRuntime} | type ${item.incomingType}/${item.outgoingType} | re-export ${item.incomingReexport}/${item.outgoingReexport}`,
+      )
+    }
+  }
+  lines.push('')
+  lines.push('### Block Risk')
+  if (report.risk.blocks.length === 0) {
+    lines.push('- none')
+  } else {
+    for (const item of report.risk.blocks) {
+      lines.push(
+        `- ${item.label} | score=${item.score} | files=${item.fileCount} | cross runtime in=${item.incomingCrossBlockRuntime} out=${item.outgoingCrossBlockRuntime}`,
+      )
+    }
+  }
+  lines.push('')
+  lines.push('## Refactor Signals')
+  lines.push('### Orphan Runtime Modules')
+  if (report.refactorSignals.orphanRuntimeModules.length === 0) {
+    lines.push('- none')
+  } else {
+    for (const item of report.refactorSignals.orphanRuntimeModules) {
+      lines.push(
+        `- ${item.path} | exports=${item.exports} | typeTouches=${item.typeTouches} | reexportTouches=${item.reexportTouches}`,
+      )
+    }
+  }
+  lines.push('')
+  lines.push('### Re-export Hubs')
+  if (report.refactorSignals.reexportHubs.length === 0) {
+    lines.push('- none')
+  } else {
+    for (const item of report.refactorSignals.reexportHubs) {
+      lines.push(`- ${item.path} | re-export out=${item.outgoingReexport} | runtime in=${item.incomingRuntime} | exports=${item.exports}`)
+    }
+  }
+  lines.push('')
+  lines.push('### Duplicate Utility Groups')
+  if (report.refactorSignals.duplicateUtilityGroups.length === 0) {
+    lines.push('- none')
+  } else {
+    for (const item of report.refactorSignals.duplicateUtilityGroups) {
+      lines.push(`- ${item.baseName} [${item.hash}]`)
+      for (const path of item.paths) {
+        lines.push(`  - ${path}`)
+      }
+    }
+  }
+  lines.push('')
+  lines.push('### Re-export Bottlenecks')
+  if (report.refactorSignals.reexportBottlenecks.length === 0) {
+    lines.push('- none')
+  } else {
+    for (const item of report.refactorSignals.reexportBottlenecks) {
+      lines.push(
+        `- ${item.path} | score=${item.score} | runtime-in=${item.incomingRuntime} | reexport-in=${item.incomingReexport} | reexport-out=${item.outgoingReexport}`,
+      )
+    }
+  }
+  lines.push('')
+  lines.push('### Re-export Chains')
+  if (report.refactorSignals.reexportChains.length === 0) {
+    lines.push('- none')
+  } else {
+    for (const chain of report.refactorSignals.reexportChains) {
+      lines.push(`- ${chain}`)
+    }
+  }
+  lines.push('')
+  lines.push('## Architecture')
+  lines.push('### Rules')
+  for (const line of report.architecture.rules) {
+    lines.push(`- ${line}`)
+  }
+  lines.push('')
+  lines.push('### Layer Distribution')
+  lines.push(
+    `- ui ${report.architecture.layerDistribution.ui}, domain ${report.architecture.layerDistribution.domain}, infra ${report.architecture.layerDistribution.infra}, shared ${report.architecture.layerDistribution.shared}, tests ${report.architecture.layerDistribution.tests}, unknown ${report.architecture.layerDistribution.unknown}`,
+  )
+  lines.push('')
+  lines.push('### Violations by Kind')
+  lines.push(
+    `- runtime ${report.architecture.violationsByKind.runtime}, type ${report.architecture.violationsByKind.type}, re-export ${report.architecture.violationsByKind['re-export']}`,
+  )
+  lines.push('')
+  lines.push('### Violations by Layer Pair')
+  if (report.architecture.violationsByLayerPair.length === 0) {
+    lines.push('- none')
+  } else {
+    for (const item of report.architecture.violationsByLayerPair) {
+      lines.push(`- ${item.pair}: ${item.count}`)
+    }
+  }
+  lines.push('')
+  lines.push('### Violation Sample')
+  if (report.architecture.violations.length === 0) {
+    lines.push('- none')
+  } else {
+    for (const item of report.architecture.violations) {
+      lines.push(`- [${item.kind}] ${item.fromLayer}->${item.toLayer} | ${item.fromPath} -> ${item.toPath}`)
+    }
+  }
+  lines.push('')
+  return lines.join('\n')
+}
+
+function buildArchitectureMarkdownReport(report: ArchitectureExportReport) {
+  const lines: string[] = []
+  lines.push('# Architecture Report')
+  lines.push('')
+  lines.push(`- Generated: ${report.generatedAt}`)
+  lines.push(`- Project: ${report.projectRoot ?? '-'}`)
+  lines.push('')
+  lines.push('## Rules')
+  for (const rule of report.rules) {
+    lines.push(`- ${rule}`)
+  }
+  lines.push('')
+  lines.push('## Layer Distribution')
+  lines.push(
+    `- ui ${report.layerDistribution.ui}, domain ${report.layerDistribution.domain}, infra ${report.layerDistribution.infra}, shared ${report.layerDistribution.shared}, tests ${report.layerDistribution.tests}, unknown ${report.layerDistribution.unknown}`,
+  )
+  lines.push('')
+  lines.push('## Violations by Kind')
+  lines.push(
+    `- runtime ${report.violationsByKind.runtime}, type ${report.violationsByKind.type}, re-export ${report.violationsByKind['re-export']}`,
+  )
+  lines.push('')
+  lines.push('## Violations by Layer Pair')
+  if (report.violationsByLayerPair.length === 0) {
+    lines.push('- none')
+  } else {
+    for (const item of report.violationsByLayerPair) {
+      lines.push(`- ${item.pair}: ${item.count}`)
+    }
+  }
+  lines.push('')
+  lines.push('## Violation Sample')
+  if (report.violations.length === 0) {
+    lines.push('- none')
+  } else {
+    for (const item of report.violations) {
+      lines.push(`- [${item.kind}] ${item.fromLayer}->${item.toLayer} | ${item.fromPath} -> ${item.toPath}`)
+    }
+  }
+  lines.push('')
+  return lines.join('\n')
+}
+
+function isAnalysisExportReportCandidate(value: unknown): value is AnalysisExportReport {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const candidate = value as Partial<AnalysisExportReport>
+  return (
+    typeof candidate.generatedAt === 'string' &&
+    !!candidate.summary &&
+    typeof candidate.summary.tsFiles === 'number' &&
+    typeof candidate.summary.dependencyEdges === 'number' &&
+    !!candidate.edgeKinds &&
+    typeof candidate.edgeKinds.runtime === 'number' &&
+    typeof candidate.edgeKinds.type === 'number' &&
+    typeof candidate.edgeKinds['re-export'] === 'number' &&
+    !!candidate.architecture &&
+    Array.isArray(candidate.architecture.rules)
+  )
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('overview')
   const [overviewStructureMode, setOverviewStructureMode] = useState<StructureViewMode>('treemap')
@@ -242,6 +592,8 @@ function App() {
   const [edgeKindFilter, setEdgeKindFilter] = useState<EdgeKindFilter>('all')
   const [edgeColorPriority, setEdgeColorPriority] = useState<EdgeColorPriority>('direction')
   const [highlightArchitectureViolations, setHighlightArchitectureViolations] = useState(true)
+  const [showBaselineDiff, setShowBaselineDiff] = useState(false)
+  const [showOnlyNewDiff, setShowOnlyNewDiff] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [collapsedBlockIds, setCollapsedBlockIds] = useState<Set<string>>(new Set())
   const [autoFolderDepth, setAutoFolderDepth] = useState(true)
@@ -260,6 +612,9 @@ function App() {
   const [isLayouting, setIsLayouting] = useState(false)
   const [isScanning, setIsScanning] = useState(false)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [baselineReport, setBaselineReport] = useState<AnalysisExportReport | null>(null)
+  const [baselineReportName, setBaselineReportName] = useState<string | null>(null)
+  const [baselineReportError, setBaselineReportError] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const treeLines = useMemo(() => buildTreeLines(scanResult?.tree ?? null), [scanResult])
   const fileLocByPath = useMemo(() => {
@@ -681,6 +1036,132 @@ function App() {
       )
       .slice(0, 20)
   }, [dependencyGraph, refactorSignalStatsByPath])
+  const duplicateUtilityGroups = useMemo(() => {
+    if (!scanResult || scanResult.files.length === 0) {
+      return []
+    }
+    const groups = new Map<string, { baseName: string; hash: string; paths: string[] }>()
+    for (const file of scanResult.files) {
+      const normalizedPath = file.path.toLowerCase()
+      const isUtilityPath =
+        normalizedPath.includes('/utils/') ||
+        normalizedPath.includes('/helpers/') ||
+        normalizedPath.includes('/common/') ||
+        normalizedPath.includes('/shared/') ||
+        normalizedPath.includes('/lib/') ||
+        normalizedPath.includes('/hooks/') ||
+        normalizedPath.endsWith('.util.ts') ||
+        normalizedPath.endsWith('.utils.ts')
+      if (!isUtilityPath) {
+        continue
+      }
+      const fileName = file.path.split('/').pop() ?? file.path
+      const normalizedContent = file.content
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+      if (!normalizedContent) {
+        continue
+      }
+      const hash = hashText(normalizedContent)
+      const key = `${fileName.toLowerCase()}::${hash}`
+      const existing = groups.get(key)
+      if (existing) {
+        existing.paths.push(file.path)
+      } else {
+        groups.set(key, { baseName: fileName, hash, paths: [file.path] })
+      }
+    }
+    return [...groups.values()]
+      .filter((item) => item.paths.length > 1)
+      .map((item) => ({
+        baseName: item.baseName,
+        hash: item.hash,
+        paths: [...item.paths].sort((left, right) => left.localeCompare(right)),
+      }))
+      .sort((left, right) => right.paths.length - left.paths.length || left.baseName.localeCompare(right.baseName))
+      .slice(0, 20)
+  }, [scanResult])
+  const reexportBottleneckFiles = useMemo(() => {
+    if (!dependencyGraph) {
+      return []
+    }
+    return dependencyGraph.files
+      .map((file) => {
+        const stats = refactorSignalStatsByPath.get(file.path)
+        const outgoingReexport = stats?.outgoingReexport ?? 0
+        const incomingReexport = stats?.incomingReexport ?? 0
+        const incomingRuntime = stats?.incomingRuntime ?? 0
+        const score = outgoingReexport * 2 + incomingRuntime + incomingReexport * 1.5
+        return {
+          path: file.path,
+          score: Number(score.toFixed(2)),
+          incomingRuntime,
+          incomingReexport,
+          outgoingReexport,
+        }
+      })
+      .filter((item) => item.outgoingReexport > 0 && (item.incomingRuntime > 0 || item.incomingReexport > 0))
+      .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+      .slice(0, 20)
+  }, [dependencyGraph, refactorSignalStatsByPath])
+  const reexportChains = useMemo(() => {
+    if (!dependencyGraph) {
+      return []
+    }
+    const adjacency = new Map<string, Set<string>>()
+    const incomingCount = new Map<string, number>()
+
+    for (const file of dependencyGraph.files) {
+      adjacency.set(file.path, new Set<string>())
+      incomingCount.set(file.path, 0)
+    }
+    for (const edge of dependencyGraph.edges) {
+      if (edge.kind !== 're-export') {
+        continue
+      }
+      adjacency.get(edge.fromPath)?.add(edge.toPath)
+      incomingCount.set(edge.toPath, (incomingCount.get(edge.toPath) ?? 0) + 1)
+    }
+
+    const starts = [...adjacency.keys()].filter((path) => (incomingCount.get(path) ?? 0) === 0)
+    const roots = starts.length > 0 ? starts : [...adjacency.keys()]
+    const chains = new Set<string>()
+    const maxDepth = 6
+
+    const dfs = (current: string, path: string[]) => {
+      if (path.length > maxDepth) {
+        return
+      }
+      const nextTargets = [...(adjacency.get(current) ?? [])].sort((left, right) => left.localeCompare(right))
+      if (nextTargets.length === 0) {
+        if (path.length >= 3) {
+          chains.add(path.join(' -> '))
+        }
+        return
+      }
+      let extended = false
+      for (const next of nextTargets) {
+        if (path.includes(next)) {
+          continue
+        }
+        extended = true
+        dfs(next, [...path, next])
+      }
+      if (!extended && path.length >= 3) {
+        chains.add(path.join(' -> '))
+      }
+    }
+
+    for (const root of roots) {
+      dfs(root, [root])
+    }
+
+    return [...chains]
+      .sort((left, right) => right.split(' -> ').length - left.split(' -> ').length || left.localeCompare(right))
+      .slice(0, 20)
+  }, [dependencyGraph])
   const architectureViolationEdgeKeySet = useMemo(() => {
     const keys = new Set<string>()
     for (const item of architectureViolations) {
@@ -711,6 +1192,253 @@ function App() {
     }
     return ids
   }, [architectureViolations, scanResult?.rootName])
+  const analysisReport = useMemo<AnalysisExportReport>(() => {
+    const now = new Date().toISOString()
+    return {
+      generatedAt: now,
+      projectRoot: scanResult?.rootName ?? null,
+      summary: {
+        tsFiles: scanResult?.tsFileCount ?? 0,
+        directories: scanResult?.directoryCount ?? 0,
+        dependencyEdges: dependencyGraph?.edges.length ?? 0,
+        cycleEdges: topCycleGroups.length,
+        unresolvedImports: dependencyGraph?.unresolvedImportCount ?? 0,
+        unresolvedInternal: dependencyGraph?.unresolvedInternalCount ?? 0,
+        unresolvedExternal: dependencyGraph?.unresolvedExternalCount ?? 0,
+        aliasResolved: dependencyGraph?.aliasResolvedCount ?? 0,
+      },
+      edgeKinds: dependencyEdgeKindCounts,
+      codeHealth: {
+        hotspots: hotspotFiles.map((item) => ({
+          path: item.path,
+          score: item.score,
+          incoming: item.incoming,
+          outgoing: item.outgoing,
+          loc: item.loc,
+        })),
+        deadExports: potentiallyDeadExportFiles.map((file) => ({
+          path: file.path,
+          exportCount: file.exports.length,
+          exports: file.exports,
+        })),
+        cycleGroups: topCycleGroups.map((group) => ({
+          id: group.id,
+          size: group.size,
+          files: group.filePaths,
+        })),
+      },
+      risk: {
+        files: riskByFile,
+        blocks: riskByBlock,
+      },
+      refactorSignals: {
+        orphanRuntimeModules,
+        reexportHubs: reexportHubFiles,
+        duplicateUtilityGroups,
+        reexportBottlenecks: reexportBottleneckFiles,
+        reexportChains,
+      },
+      architecture: {
+        rules: architectureRuleLines,
+        layerDistribution: architectureLayerDistribution,
+        violationsByKind: architectureViolationByKind,
+        violationsByLayerPair: architectureViolationByPair.map(([pair, count]) => ({ pair, count })),
+        violations: architectureViolations.map((item) => ({
+          kind: item.kind,
+          fromLayer: item.fromLayer,
+          toLayer: item.toLayer,
+          fromPath: item.fromPath,
+          toPath: item.toPath,
+        })),
+      },
+      graphSnapshot: {
+        files: dependencyGraph?.files.map((file) => file.path) ?? [],
+        edges:
+          dependencyGraph?.edges.map((edge) => ({
+            fromPath: edge.fromPath,
+            toPath: edge.toPath,
+            kind: edge.kind,
+          })) ?? [],
+      },
+    }
+  }, [
+    architectureLayerDistribution,
+    architectureRuleLines,
+    architectureViolationByKind,
+    architectureViolationByPair,
+    architectureViolations,
+    dependencyEdgeKindCounts,
+    dependencyGraph,
+    hotspotFiles,
+    orphanRuntimeModules,
+    potentiallyDeadExportFiles,
+    duplicateUtilityGroups,
+    reexportBottleneckFiles,
+    reexportChains,
+    reexportHubFiles,
+    riskByBlock,
+    riskByFile,
+    scanResult?.directoryCount,
+    scanResult?.rootName,
+    scanResult?.tsFileCount,
+    topCycleGroups,
+  ])
+  const architectureReport = useMemo<ArchitectureExportReport>(
+    () => ({
+      generatedAt: new Date().toISOString(),
+      projectRoot: scanResult?.rootName ?? null,
+      rules: architectureRuleLines,
+      layerDistribution: architectureLayerDistribution,
+      violationsByKind: architectureViolationByKind,
+      violationsByLayerPair: architectureViolationByPair.map(([pair, count]) => ({ pair, count })),
+      violations: architectureViolations.map((item) => ({
+        kind: item.kind,
+        fromLayer: item.fromLayer,
+        toLayer: item.toLayer,
+        fromPath: item.fromPath,
+        toPath: item.toPath,
+      })),
+    }),
+    [
+      architectureLayerDistribution,
+      architectureRuleLines,
+      architectureViolationByKind,
+      architectureViolationByPair,
+      architectureViolations,
+      scanResult?.rootName,
+    ],
+  )
+  const baselineDelta = useMemo(() => {
+    if (!baselineReport) {
+      return null
+    }
+    return {
+      tsFiles: analysisReport.summary.tsFiles - baselineReport.summary.tsFiles,
+      directories: analysisReport.summary.directories - baselineReport.summary.directories,
+      dependencyEdges: analysisReport.summary.dependencyEdges - baselineReport.summary.dependencyEdges,
+      cycleEdges: analysisReport.summary.cycleEdges - baselineReport.summary.cycleEdges,
+      unresolvedImports: analysisReport.summary.unresolvedImports - baselineReport.summary.unresolvedImports,
+      unresolvedInternal: analysisReport.summary.unresolvedInternal - baselineReport.summary.unresolvedInternal,
+      unresolvedExternal: analysisReport.summary.unresolvedExternal - baselineReport.summary.unresolvedExternal,
+      aliasResolved: analysisReport.summary.aliasResolved - baselineReport.summary.aliasResolved,
+      edgeKinds: {
+        runtime: analysisReport.edgeKinds.runtime - baselineReport.edgeKinds.runtime,
+        type: analysisReport.edgeKinds.type - baselineReport.edgeKinds.type,
+        're-export': analysisReport.edgeKinds['re-export'] - baselineReport.edgeKinds['re-export'],
+      },
+      architectureViolations:
+        analysisReport.architecture.violations.length - baselineReport.architecture.violations.length,
+      orphanRuntimeModules:
+        analysisReport.refactorSignals.orphanRuntimeModules.length -
+        (baselineReport.refactorSignals?.orphanRuntimeModules?.length ?? 0),
+      reexportHubs:
+        analysisReport.refactorSignals.reexportHubs.length - (baselineReport.refactorSignals?.reexportHubs?.length ?? 0),
+    }
+  }, [analysisReport, baselineReport])
+  const hasBaselineGraphSnapshot = useMemo(
+    () =>
+      !!baselineReport &&
+      Array.isArray(baselineReport.graphSnapshot?.files) &&
+      Array.isArray(baselineReport.graphSnapshot?.edges),
+    [baselineReport],
+  )
+  const baselineFilePathSet = useMemo(() => {
+    if (!hasBaselineGraphSnapshot) {
+      return new Set<string>()
+    }
+    return new Set(baselineReport?.graphSnapshot?.files ?? [])
+  }, [hasBaselineGraphSnapshot, baselineReport])
+  const baselineEdgeKeySet = useMemo(() => {
+    const keys = new Set<string>()
+    if (!hasBaselineGraphSnapshot) {
+      return keys
+    }
+    for (const edge of baselineReport?.graphSnapshot?.edges ?? []) {
+      keys.add(`${edge.fromPath}->${edge.toPath}::${edge.kind}`)
+    }
+    return keys
+  }, [hasBaselineGraphSnapshot, baselineReport])
+  const newFilePathSet = useMemo(() => {
+    const ids = new Set<string>()
+    if (!showBaselineDiff || !hasBaselineGraphSnapshot) {
+      return ids
+    }
+    for (const file of dependencyGraph?.files ?? []) {
+      if (!baselineFilePathSet.has(file.path)) {
+        ids.add(file.path)
+      }
+    }
+    return ids
+  }, [showBaselineDiff, hasBaselineGraphSnapshot, dependencyGraph, baselineFilePathSet])
+  const newFileEdgeKeySet = useMemo(() => {
+    const keys = new Set<string>()
+    if (!showBaselineDiff || !hasBaselineGraphSnapshot) {
+      return keys
+    }
+    for (const edge of dependencyGraph?.edges ?? []) {
+      if (edgeKindFilter !== 'all' && edge.kind !== edgeKindFilter) {
+        continue
+      }
+      const key = `${edge.fromPath}->${edge.toPath}::${edge.kind}`
+      if (!baselineEdgeKeySet.has(key)) {
+        keys.add(key)
+      }
+    }
+    return keys
+  }, [showBaselineDiff, hasBaselineGraphSnapshot, dependencyGraph, edgeKindFilter, baselineEdgeKeySet])
+  const newBlockPairSet = useMemo(() => {
+    const keys = new Set<string>()
+    if (!showBaselineDiff || !hasBaselineGraphSnapshot) {
+      return keys
+    }
+    for (const edge of dependencyGraph?.edges ?? []) {
+      if (edgeKindFilter !== 'all' && edge.kind !== edgeKindFilter) {
+        continue
+      }
+      const fileEdgeKey = `${edge.fromPath}->${edge.toPath}::${edge.kind}`
+      if (!newFileEdgeKeySet.has(fileEdgeKey)) {
+        continue
+      }
+      const sourceBlock = `block:${getTopLevelBlockLabelForPath(edge.fromPath, scanResult?.rootName)}`
+      const targetBlock = `block:${getTopLevelBlockLabelForPath(edge.toPath, scanResult?.rootName)}`
+      if (sourceBlock === targetBlock) {
+        continue
+      }
+      keys.add(`${sourceBlock}->${targetBlock}`)
+    }
+    return keys
+  }, [showBaselineDiff, hasBaselineGraphSnapshot, dependencyGraph, edgeKindFilter, newFileEdgeKeySet, scanResult?.rootName])
+  const diffRelevantNodeIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (!showBaselineDiff || !showOnlyNewDiff || layoutedNodes.length === 0) {
+      return ids
+    }
+    const parentById = new Map<string, string>()
+    for (const node of layoutedNodes) {
+      if (node.parentId) {
+        parentById.set(node.id, node.parentId)
+      }
+    }
+    for (const path of newFilePathSet) {
+      const fileNodeId = `file:${path}`
+      ids.add(fileNodeId)
+      let parentId = parentById.get(fileNodeId)
+      while (parentId) {
+        ids.add(parentId)
+        parentId = parentById.get(parentId)
+      }
+    }
+    for (const pair of newBlockPairSet) {
+      const [source, target] = pair.split('->')
+      if (source) {
+        ids.add(source)
+      }
+      if (target) {
+        ids.add(target)
+      }
+    }
+    return ids
+  }, [showBaselineDiff, showOnlyNewDiff, layoutedNodes, newFilePathSet, newBlockPairSet])
 
   const flowGraph = useMemo(() => {
     if (!scanResult || !dependencyGraph) {
@@ -796,9 +1524,23 @@ function App() {
     if (!flowGraph) {
       return []
     }
-    const filteredByCollapse = flowGraph.edges.filter(
+    let filteredByCollapse = flowGraph.edges.filter(
       (edge) => !hiddenNodeIds.has(edge.source) && !hiddenNodeIds.has(edge.target),
     )
+    if (showBaselineDiff && showOnlyNewDiff && hasBaselineGraphSnapshot) {
+      filteredByCollapse = filteredByCollapse.filter((edge) => {
+        const isFileEdge = edge.source.startsWith('file:') && edge.target.startsWith('file:')
+        if (isFileEdge) {
+          const kind = String(edge.data?.dependencyKind ?? 'runtime')
+          return newFileEdgeKeySet.has(`${edge.source.slice(5)}->${edge.target.slice(5)}::${kind}`)
+        }
+        const isBlockEdge = edge.source.startsWith('block:') && edge.target.startsWith('block:')
+        if (isBlockEdge) {
+          return newBlockPairSet.has(`${edge.source}->${edge.target}`)
+        }
+        return false
+      })
+    }
     if (!selectedNodeId) {
       return filteredByCollapse
     }
@@ -809,7 +1551,17 @@ function App() {
       return filteredByCollapse.filter((edge) => edge.source === selectedNodeId)
     }
     return filteredByCollapse.filter((edge) => edge.source === selectedNodeId || edge.target === selectedNodeId)
-  }, [flowGraph, hiddenNodeIds, selectedNodeId, directionFilter])
+  }, [
+    flowGraph,
+    hiddenNodeIds,
+    selectedNodeId,
+    directionFilter,
+    showBaselineDiff,
+    showOnlyNewDiff,
+    hasBaselineGraphSnapshot,
+    newFileEdgeKeySet,
+    newBlockPairSet,
+  ])
 
   const connectedNodeIds = useMemo(() => {
     const ids = new Set<string>()
@@ -855,7 +1607,15 @@ function App() {
       return []
     }
     return layoutedNodes
-      .filter((node) => !hiddenNodeIds.has(node.id))
+      .filter((node) => {
+        if (hiddenNodeIds.has(node.id)) {
+          return false
+        }
+        if (showBaselineDiff && showOnlyNewDiff && hasBaselineGraphSnapshot) {
+          return diffRelevantNodeIds.has(node.id)
+        }
+        return true
+      })
       .map((node) => {
         const isSelected = node.id === selectedNodeId
         const isConnected = connectedNodeIds.has(node.id)
@@ -865,6 +1625,7 @@ function App() {
         const isIncomingRelated = incomingRelatedNodeIds.has(node.id)
         const isOutgoingRelated = outgoingRelatedNodeIds.has(node.id)
         const isArchitectureViolationNode = architectureViolationNodeIds.has(node.id)
+        const isNewFileNode = node.id.startsWith('file:') && newFilePathSet.has(node.id.slice(5))
         const nextStyle = {
           ...(node.style ?? {}),
           opacity: 1,
@@ -879,6 +1640,9 @@ function App() {
           if (!isFileNode && !isBlockWithMatch) {
             nextStyle.opacity = Math.min(nextStyle.opacity, 0.3)
           }
+        }
+        if (showBaselineDiff && hasBaselineGraphSnapshot && isFileNode && !isNewFileNode) {
+          nextStyle.opacity = Math.min(nextStyle.opacity, 0.28)
         }
         if (selectedNodeId && isSelected) {
           nextStyle.border = '2px solid #ffe79f'
@@ -896,6 +1660,10 @@ function App() {
           nextStyle.boxShadow = '0 0 0 2px rgba(255, 231, 159, 0.55)'
         } else if (!isSelected) {
           nextStyle.boxShadow = 'none'
+        }
+        if (showBaselineDiff && hasBaselineGraphSnapshot && isNewFileNode && !isSelected) {
+          nextStyle.border = '2px solid #57e6ff'
+          nextStyle.boxShadow = '0 0 0 2px rgba(87, 230, 255, 0.4), 0 0 12px rgba(87, 230, 255, 0.22)'
         }
         if (highlightArchitectureViolations && isArchitectureViolationNode && !isSelected) {
           if (!selectedNodeId) {
@@ -924,10 +1692,17 @@ function App() {
     blockIdsWithMatches,
     architectureViolationNodeIds,
     highlightArchitectureViolations,
+    showBaselineDiff,
+    showOnlyNewDiff,
+    hasBaselineGraphSnapshot,
+    newFilePathSet,
+    diffRelevantNodeIds,
   ])
 
   const displayEdges = useMemo<Edge[]>(() => {
-    const edgeRenderToken = `${routingStyle}|${busDisplayMode}|${selectedNodeId ?? 'none'}|${directionFilter}|${edgeColorPriority}`
+    const edgeRenderToken = `${routingStyle}|${busDisplayMode}|${selectedNodeId ?? 'none'}|${directionFilter}|${edgeColorPriority}|${
+      showBaselineDiff ? 'diff-on' : 'diff-off'
+    }|${showOnlyNewDiff ? 'only-new' : 'all-diff'}`
     const nodeById = new Map(visibleNodes.map((node) => [node.id, node]))
     const parentById = new Map<string, string>()
     for (const node of visibleNodes) {
@@ -1216,6 +1991,16 @@ function App() {
       const isIncoming = selectedNodeId ? edge.target === selectedNodeId : false
       const isOutgoing = selectedNodeId ? edge.source === selectedNodeId : false
       const isConnected = isIncoming || isOutgoing
+      const isNewFileEdge =
+        edge.source.startsWith('file:') &&
+        edge.target.startsWith('file:') &&
+        newFileEdgeKeySet.has(
+          `${edge.source.slice(5)}->${edge.target.slice(5)}::${String(edge.data?.dependencyKind ?? 'runtime')}`,
+        )
+      const isNewBlockEdge =
+        edge.source.startsWith('block:') &&
+        edge.target.startsWith('block:') &&
+        newBlockPairSet.has(`${edge.source}->${edge.target}`)
       const isFileViolationEdge =
         edge.source.startsWith('file:') &&
         edge.target.startsWith('file:') &&
@@ -1225,15 +2010,19 @@ function App() {
         edge.target.startsWith('block:') &&
         (architectureViolationBlockPairCount.get(`${edge.source}->${edge.target}`) ?? 0) > 0
       const isArchitectureViolationEdge = isFileViolationEdge || isBlockViolationEdge
+      const isNewDiffEdge = showBaselineDiff && hasBaselineGraphSnapshot && (isNewFileEdge || isNewBlockEdge)
 
       const dependencyKind = edge.data?.dependencyKind as DependencyEdge['kind'] | undefined
       const kindColor = dependencyKind === 'type' ? '#b792ff' : dependencyKind === 're-export' ? '#59ccff' : '#7ea3bd'
-      let color = isArchitectureViolationEdge && highlightArchitectureViolations ? '#ff6b9a' : kindColor
+      let color = isNewDiffEdge ? '#57e6ff' : isArchitectureViolationEdge && highlightArchitectureViolations ? '#ff6b9a' : kindColor
       let strokeWidth = Math.max(Number(edge.style?.strokeWidth ?? 0), 1.4)
       const isCycleColored = String(edge.style?.stroke ?? '').startsWith('#ff')
+      let strokeOpacity = 1
 
       if (selectedNodeId && isConnected) {
-        if (isArchitectureViolationEdge && highlightArchitectureViolations) {
+        if (isNewDiffEdge) {
+          color = '#57e6ff'
+        } else if (isArchitectureViolationEdge && highlightArchitectureViolations) {
           color = '#ff6b9a'
         } else if (edgeColorPriority === 'direction') {
           if (isOutgoing && !isIncoming) {
@@ -1246,15 +2035,23 @@ function App() {
         } else {
           color = kindColor
         }
-        strokeWidth = Math.max(strokeWidth, isArchitectureViolationEdge && highlightArchitectureViolations ? 2.8 : 2)
+        strokeWidth = Math.max(
+          strokeWidth,
+          isNewDiffEdge ? 2.8 : isArchitectureViolationEdge && highlightArchitectureViolations ? 2.8 : 2,
+        )
       } else if (isCycleColored) {
         color = String(edge.style?.stroke)
       } else {
-        color = isArchitectureViolationEdge && highlightArchitectureViolations ? '#ff6b9a' : kindColor
+        color = isNewDiffEdge ? '#57e6ff' : isArchitectureViolationEdge && highlightArchitectureViolations ? '#ff6b9a' : kindColor
       }
 
       if (isArchitectureViolationEdge && highlightArchitectureViolations) {
         strokeWidth = Math.max(strokeWidth, 2.4)
+      }
+      if (isNewDiffEdge) {
+        strokeWidth = Math.max(strokeWidth, 2.6)
+      } else if (showBaselineDiff && hasBaselineGraphSnapshot) {
+        strokeOpacity = 0.22
       }
 
       const baseEdge: Edge = {
@@ -1265,6 +2062,7 @@ function App() {
           ...(edge.style ?? {}),
           stroke: color,
           strokeWidth,
+          opacity: strokeOpacity,
         },
         markerEnd:
           edge.markerEnd && typeof edge.markerEnd === 'object'
@@ -1362,6 +2160,11 @@ function App() {
     architectureViolationEdgeKeySet,
     architectureViolationBlockPairCount,
     highlightArchitectureViolations,
+    showBaselineDiff,
+    showOnlyNewDiff,
+    hasBaselineGraphSnapshot,
+    newFileEdgeKeySet,
+    newBlockPairSet,
   ])
 
 
@@ -1412,6 +2215,8 @@ function App() {
     setFolderControlMode('preset')
     setEdgeKindFilter('all')
     setEdgeColorPriority('direction')
+    setShowBaselineDiff(false)
+    setShowOnlyNewDiff(false)
     setSearchQuery('')
     setHoveredFilePath(null)
     setIsCanvasLocked(false)
@@ -1784,6 +2589,56 @@ function App() {
     setActiveTab('board')
   }
 
+  function exportAnalysisReportJson() {
+    const projectName = scanResult?.rootName ?? 'project'
+    const fileName = `analysis-report-${projectName}.json`
+    downloadTextFile(fileName, JSON.stringify(analysisReport, null, 2), 'application/json;charset=utf-8')
+  }
+
+  function exportAnalysisReportMarkdown() {
+    const projectName = scanResult?.rootName ?? 'project'
+    const fileName = `analysis-report-${projectName}.md`
+    downloadTextFile(fileName, buildMarkdownReport(analysisReport), 'text/markdown;charset=utf-8')
+  }
+
+  function exportArchitectureReportJson() {
+    const projectName = scanResult?.rootName ?? 'project'
+    const fileName = `architecture-report-${projectName}.json`
+    downloadTextFile(fileName, JSON.stringify(architectureReport, null, 2), 'application/json;charset=utf-8')
+  }
+
+  function exportArchitectureReportMarkdown() {
+    const projectName = scanResult?.rootName ?? 'project'
+    const fileName = `architecture-report-${projectName}.md`
+    downloadTextFile(fileName, buildArchitectureMarkdownReport(architectureReport), 'text/markdown;charset=utf-8')
+  }
+
+  async function importBaselineReport(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file) {
+      return
+    }
+    try {
+      const raw = await file.text()
+      const parsed = JSON.parse(raw) as unknown
+      if (!isAnalysisExportReportCandidate(parsed)) {
+        setBaselineReportError('Selected file is not a valid analysis report JSON.')
+        setBaselineReport(null)
+        setBaselineReportName(null)
+        return
+      }
+      setBaselineReport(parsed)
+      setBaselineReportName(file.name)
+      setBaselineReportError(null)
+    } catch {
+      setBaselineReportError('Failed to import baseline report (invalid JSON or unreadable file).')
+      setBaselineReport(null)
+      setBaselineReportName(null)
+    } finally {
+      event.target.value = ''
+    }
+  }
+
   useEffect(() => {
     if (!flowGraph || graphMode !== 'file-level') {
       return
@@ -1988,6 +2843,68 @@ function App() {
             </div>
 
             <div className="section-card">
+              <h2>Export Report</h2>
+              <p>Save current diagnostics snapshot as JSON or Markdown.</p>
+              <div className="actions">
+                <button type="button" onClick={exportAnalysisReportJson} disabled={!scanResult || !dependencyGraph}>
+                  Export JSON
+                </button>
+                <button type="button" onClick={exportAnalysisReportMarkdown} disabled={!scanResult || !dependencyGraph}>
+                  Export Markdown
+                </button>
+              </div>
+            </div>
+
+            <div className="section-card">
+              <h2>Compare with Baseline</h2>
+              <p>Import a previously exported analysis JSON to see deltas.</p>
+              <div className="actions">
+                <input type="file" accept=".json,application/json" onChange={importBaselineReport} />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBaselineReport(null)
+                    setBaselineReportName(null)
+                    setBaselineReportError(null)
+                  }}
+                  disabled={!baselineReport}
+                >
+                  Clear baseline
+                </button>
+              </div>
+              {baselineReportName && (
+                <p>
+                  <strong>Loaded:</strong> {baselineReportName}
+                </p>
+              )}
+              {baselineReportError && <p className="error">{baselineReportError}</p>}
+              {baselineDelta && (
+                <ul className="flat-list">
+                  <li>
+                    <strong>TS Files:</strong> {baselineDelta.tsFiles >= 0 ? '+' : ''}
+                    {baselineDelta.tsFiles}
+                  </li>
+                  <li>
+                    <strong>Dependency Edges:</strong> {baselineDelta.dependencyEdges >= 0 ? '+' : ''}
+                    {baselineDelta.dependencyEdges}
+                  </li>
+                  <li>
+                    <strong>Cycle Edges:</strong> {baselineDelta.cycleEdges >= 0 ? '+' : ''}
+                    {baselineDelta.cycleEdges}
+                  </li>
+                  <li>
+                    <strong>Unresolved Imports:</strong> {baselineDelta.unresolvedImports >= 0 ? '+' : ''}
+                    {baselineDelta.unresolvedImports}
+                  </li>
+                  <li>
+                    <strong>Architecture Violations:</strong> {baselineDelta.architectureViolations >= 0 ? '+' : ''}
+                    {baselineDelta.architectureViolations}
+                  </li>
+                </ul>
+              )}
+            </div>
+
+            <div className="section-card">
               <h2>Code Health (MVP)</h2>
               <p>
                 <strong>Hotspots:</strong> {hotspotFiles.length}
@@ -2018,6 +2935,15 @@ function App() {
               <p>
                 <strong>Re-export hubs:</strong> {reexportHubFiles.length}
               </p>
+              <p>
+                <strong>Duplicate utility groups:</strong> {duplicateUtilityGroups.length}
+              </p>
+              <p>
+                <strong>Re-export bottlenecks:</strong> {reexportBottleneckFiles.length}
+              </p>
+              <p>
+                <strong>Re-export chains:</strong> {reexportChains.length}
+              </p>
               {orphanRuntimeModules.length > 0 && (
                 <>
                   <h2>Orphan Candidates</h2>
@@ -2039,6 +2965,21 @@ function App() {
                   <ul className="quick-action-list">
                     {reexportHubFiles.slice(0, 8).map((item) => (
                       <li key={`rehub-${item.path}`}>
+                        <code>{item.path}</code>
+                        <button type="button" className="quick-action-button" onClick={() => focusFileOnBoard(item.path)}>
+                          Show on Board
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {reexportBottleneckFiles.length > 0 && (
+                <>
+                  <h2>Re-export Bottlenecks</h2>
+                  <ul className="quick-action-list">
+                    {reexportBottleneckFiles.slice(0, 8).map((item) => (
+                      <li key={`rebot-${item.path}`}>
                         <code>{item.path}</code>
                         <button type="button" className="quick-action-button" onClick={() => focusFileOnBoard(item.path)}>
                           Show on Board
@@ -2143,12 +3084,43 @@ function App() {
                       )
                       .join('\n')}`
                   : '\n- no candidates'}
+                {'\n\n'}
+                Refactor signals - duplicate utility groups:
+                {duplicateUtilityGroups.length > 0
+                  ? `\n${duplicateUtilityGroups
+                      .map((group) => `- ${group.baseName} [${group.hash}] | ${group.paths.join(' | ')}`)
+                      .join('\n')}`
+                  : '\n- no candidates'}
+                {'\n\n'}
+                Refactor signals - re-export bottlenecks:
+                {reexportBottleneckFiles.length > 0
+                  ? `\n${reexportBottleneckFiles
+                      .map(
+                        (item) =>
+                          `- ${item.path} | score=${item.score} | runtime-in=${item.incomingRuntime} | reexport-in=${item.incomingReexport} | reexport-out=${item.outgoingReexport}`,
+                      )
+                      .join('\n')}`
+                  : '\n- no candidates'}
+                {'\n\n'}
+                Refactor signals - re-export chains:
+                {reexportChains.length > 0 ? `\n${reexportChains.map((chain) => `- ${chain}`).join('\n')}` : '\n- no chains'}
               </pre>
             </div>
 
             <div className="section-card">
               <h2>Architecture & Selection</h2>
               <pre className="report-pre">
+                Baseline diff:
+                {baselineDelta
+                  ? `\n- files ${baselineDelta.tsFiles >= 0 ? '+' : ''}${baselineDelta.tsFiles}
+- dirs ${baselineDelta.directories >= 0 ? '+' : ''}${baselineDelta.directories}
+- edges ${baselineDelta.dependencyEdges >= 0 ? '+' : ''}${baselineDelta.dependencyEdges}
+- cycles ${baselineDelta.cycleEdges >= 0 ? '+' : ''}${baselineDelta.cycleEdges}
+- unresolved ${baselineDelta.unresolvedImports >= 0 ? '+' : ''}${baselineDelta.unresolvedImports}
+- arch violations ${baselineDelta.architectureViolations >= 0 ? '+' : ''}${baselineDelta.architectureViolations}
+- edge kinds runtime ${baselineDelta.edgeKinds.runtime >= 0 ? '+' : ''}${baselineDelta.edgeKinds.runtime}, type ${baselineDelta.edgeKinds.type >= 0 ? '+' : ''}${baselineDelta.edgeKinds.type}, re-export ${baselineDelta.edgeKinds['re-export'] >= 0 ? '+' : ''}${baselineDelta.edgeKinds['re-export']}`
+                  : '\n- baseline not loaded'}
+                {'\n\n'}
                 Architecture rule set:
                 {'\n'}- {architectureConfigDescription(architectureConfig)}
                 {'\n\n'}
@@ -2299,6 +3271,23 @@ function App() {
               </div>
             </div>
 
+            <div className="section-card">
+              <h2>Export Architecture</h2>
+              <p>Save architecture rules and violations as JSON or Markdown.</p>
+              <div className="actions">
+                <button type="button" onClick={exportArchitectureReportJson} disabled={!scanResult || !dependencyGraph}>
+                  Export JSON
+                </button>
+                <button
+                  type="button"
+                  onClick={exportArchitectureReportMarkdown}
+                  disabled={!scanResult || !dependencyGraph}
+                >
+                  Export Markdown
+                </button>
+              </div>
+            </div>
+
             {architectureViolations.length > 0 && (
               <div className="section-card">
                 <h2>Violation Quick Actions</h2>
@@ -2390,6 +3379,30 @@ function App() {
                   onChange={(event) => setHighlightArchitectureViolations(event.target.checked)}
                 />
                 Highlight architecture violations
+              </label>
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={showBaselineDiff}
+                  onChange={(event) => {
+                    const next = event.target.checked
+                    setShowBaselineDiff(next)
+                    if (!next) {
+                      setShowOnlyNewDiff(false)
+                    }
+                  }}
+                  disabled={!hasBaselineGraphSnapshot}
+                />
+                Show baseline diff
+              </label>
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={showOnlyNewDiff}
+                  onChange={(event) => setShowOnlyNewDiff(event.target.checked)}
+                  disabled={!showBaselineDiff || !hasBaselineGraphSnapshot}
+                />
+                Show only new
               </label>
               <label className="toggle-row">
                 Direction
@@ -2552,6 +3565,10 @@ function App() {
                 Architecture violation
               </span>
               <span className="legend-item">
+                <span className="legend-swatch legend-swatch-diff" />
+                New vs baseline
+              </span>
+              <span className="legend-item">
                 <span className="legend-swatch legend-swatch-import" />
                 Incoming (selected)
               </span>
@@ -2562,6 +3579,12 @@ function App() {
               <span className="legend-note">
                 `Color priority` controls whether selected edges keep kind colors or switch to direction colors.
               </span>
+              {showBaselineDiff && (
+                <span className="legend-note">`Show only new` hides baseline nodes/edges and leaves only additions.</span>
+              )}
+              {!hasBaselineGraphSnapshot && (
+                <span className="legend-note">Load baseline JSON in Diagnostics to enable diff mode.</span>
+              )}
             </div>
           </div>
           <div className="board-main">
@@ -2580,6 +3603,10 @@ function App() {
                         ? `${selectedNodeId ?? 'none'}-${directionFilter}-${edgeKindFilter}-${edgeColorPriority}`
                         : `stable-${edgeKindFilter}-${edgeColorPriority}`
                     }-${highlightArchitectureViolations ? 'arch-on' : 'arch-off'}-${
+                      showBaselineDiff ? 'diff-on' : 'diff-off'
+                    }-${showOnlyNewDiff ? 'only-new' : 'all-diff'}-${
+                      hasBaselineGraphSnapshot ? 'baseline-ready' : 'baseline-missing'
+                    }-${
                       architectureViolations.length
                     }`}
                     nodes={visibleNodes}

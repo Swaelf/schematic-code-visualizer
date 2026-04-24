@@ -562,6 +562,10 @@ button:disabled {
   background: #ff6b9a;
 }
 
+.legend-swatch-diff {
+  background: #57e6ff;
+}
+
 .canvas-meta {
   color: #b7d4ea;
   margin: 8px 0 12px;
