@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Background, MiniMap, ReactFlow, type Edge, type NodeMouseHandler } from '@xyflow/react'
 import { BusEdge } from './components/BusEdge'
+import { ClassicEdge } from './components/ClassicEdge'
 import { CanvasNavWheel } from './components/CanvasNavWheel'
 import { ChipFileNode } from './components/ChipFileNode'
 import { FolderBlockNode } from './components/FolderBlockNode'
@@ -37,6 +38,7 @@ function App() {
   const [collapsedBlockIds, setCollapsedBlockIds] = useState<Set<string>>(new Set())
   const [hoveredFilePath, setHoveredFilePath] = useState<string | null>(null)
   const [isCanvasLocked, setIsCanvasLocked] = useState(false)
+  const [savedViewport, setSavedViewport] = useState<{ x: number; y: number; zoom: number } | null>(null)
   const [layoutedNodes, setLayoutedNodes] = useState<ReturnType<typeof buildDependencyFlowGraph>['nodes']>([])
   const [isLayouting, setIsLayouting] = useState(false)
   const [isScanning, setIsScanning] = useState(false)
@@ -44,7 +46,7 @@ function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const treeLines = useMemo(() => buildTreeLines(scanResult?.tree ?? null), [scanResult])
   const nodeTypes = useMemo(() => ({ chipFile: ChipFileNode, folderBlock: FolderBlockNode }), [])
-  const edgeTypes = useMemo(() => ({ bus: BusEdge }), [])
+  const edgeTypes = useMemo(() => ({ bus: BusEdge, classicLine: ClassicEdge }), [])
 
   const isPickerAvailable = typeof window !== 'undefined' && 'showDirectoryPicker' in window
 
@@ -181,6 +183,32 @@ function App() {
     return ids
   }, [selectedNodeId, visibleEdges])
 
+  const incomingRelatedNodeIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (!selectedNodeId) {
+      return ids
+    }
+    for (const edge of visibleEdges) {
+      if (edge.target === selectedNodeId) {
+        ids.add(edge.source)
+      }
+    }
+    return ids
+  }, [selectedNodeId, visibleEdges])
+
+  const outgoingRelatedNodeIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (!selectedNodeId) {
+      return ids
+    }
+    for (const edge of visibleEdges) {
+      if (edge.source === selectedNodeId) {
+        ids.add(edge.target)
+      }
+    }
+    return ids
+  }, [selectedNodeId, visibleEdges])
+
   const visibleNodes = useMemo(() => {
     if (!flowGraph || layoutedNodes.length === 0) {
       return []
@@ -193,6 +221,8 @@ function App() {
         const isFileNode = node.id.startsWith('file:')
         const isMatch = matchingFileNodeIds.has(node.id)
         const isBlockWithMatch = blockIdsWithMatches.has(node.id)
+        const isIncomingRelated = incomingRelatedNodeIds.has(node.id)
+        const isOutgoingRelated = outgoingRelatedNodeIds.has(node.id)
         const nextStyle = {
           ...(node.style ?? {}),
           opacity: 1,
@@ -208,12 +238,21 @@ function App() {
             nextStyle.opacity = Math.min(nextStyle.opacity, 0.3)
           }
         }
-        if (isSelected) {
+        if (selectedNodeId && isSelected) {
           nextStyle.border = '2px solid #ffe79f'
+          nextStyle.boxShadow = '0 0 0 2px rgba(255, 231, 159, 0.5), 0 0 14px rgba(255, 231, 159, 0.35)'
+        } else if (selectedNodeId && (isIncomingRelated || isOutgoingRelated)) {
+          if (isIncomingRelated && !isOutgoingRelated) {
+            nextStyle.border = '2px solid #6fdc9a'
+          } else if (isOutgoingRelated && !isIncomingRelated) {
+            nextStyle.border = '2px solid #f5b04d'
+          } else {
+            nextStyle.border = '2px solid #ffe79f'
+          }
         }
-        if (normalizedSearchQuery && isMatch) {
+        if (normalizedSearchQuery && isMatch && !isSelected) {
           nextStyle.boxShadow = '0 0 0 2px rgba(255, 231, 159, 0.55)'
-        } else {
+        } else if (!isSelected) {
           nextStyle.boxShadow = 'none'
         }
         return {
@@ -227,6 +266,8 @@ function App() {
     hiddenNodeIds,
     selectedNodeId,
     connectedNodeIds,
+    incomingRelatedNodeIds,
+    outgoingRelatedNodeIds,
     normalizedSearchQuery,
     matchingFileNodeIds,
     blockIdsWithMatches,
@@ -542,7 +583,7 @@ function App() {
       const baseEdge: Edge = {
         ...edge,
         id: `${edge.id}::${edgeRenderToken}`,
-        type: routingStyle === 'bus' ? 'bus' : edge.type,
+        type: routingStyle === 'bus' ? 'bus' : 'classicLine',
         style: {
           ...(edge.style ?? {}),
           stroke: color,
@@ -679,6 +720,7 @@ function App() {
     setSearchQuery('')
     setHoveredFilePath(null)
     setIsCanvasLocked(false)
+    setSavedViewport(null)
     setActiveTab('overview')
   }, [graphMode, scanResult?.rootName])
 
@@ -1169,7 +1211,9 @@ function App() {
               </p>
               <div className="canvas-shell">
                 <ReactFlow
-                  key={`rf-${graphMode}-${routingStyle}-${busDisplayMode}-${folderPacking}`}
+                  key={`rf-${graphMode}-${routingStyle}-${busDisplayMode}-${folderPacking}-${
+                    routingStyle === 'classic' ? `${selectedNodeId ?? 'none'}-${directionFilter}` : 'stable'
+                  }`}
                   nodes={visibleNodes}
                   edges={displayEdges}
                   nodeTypes={nodeTypes}
@@ -1181,7 +1225,8 @@ function App() {
                   }}
                   onNodeMouseEnter={onNodeMouseEnter}
                   onNodeMouseLeave={onNodeMouseLeave}
-                  fitView
+                  defaultViewport={savedViewport ?? { x: 0, y: 0, zoom: 1 }}
+                  fitView={!savedViewport}
                   minZoom={0.1}
                   maxZoom={1.5}
                   panOnDrag={!isCanvasLocked}
@@ -1191,6 +1236,12 @@ function App() {
                   zoomOnDoubleClick={!isCanvasLocked}
                   nodesDraggable={!isCanvasLocked}
                   elementsSelectable={!isCanvasLocked}
+                  onInit={(instance) => {
+                    setSavedViewport(instance.getViewport())
+                  }}
+                  onMoveEnd={(_event, viewport) => {
+                    setSavedViewport(viewport)
+                  }}
                 >
                   <MiniMap
                     position="bottom-right"
