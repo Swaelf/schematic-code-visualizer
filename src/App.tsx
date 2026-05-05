@@ -187,6 +187,24 @@ type GitBranchCompareReport = {
     oldPath?: string
   }>
 }
+type GitLiveRefsResponse = {
+  repo: string
+  currentBranch: string
+  head: string
+  branches: string[]
+  tags: string[]
+}
+type GitLiveCommit = {
+  hash: string
+  shortHash: string
+  date: string
+  subject: string
+}
+type GitLiveLogResponse = {
+  repo: string
+  ref: string
+  commits: GitLiveCommit[]
+}
 type ArchitectureConfig = {
   layerMatchers: Record<ArchitectureLayerId, string[]>
   allowedTargets: Record<ArchitectureLayerId, ArchitectureLayerId[]>
@@ -647,6 +665,28 @@ function isGitBranchCompareReportCandidate(value: unknown): value is GitBranchCo
   )
 }
 
+function isGitLiveRefsResponseCandidate(value: unknown): value is GitLiveRefsResponse {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const candidate = value as Partial<GitLiveRefsResponse>
+  return (
+    typeof candidate.repo === 'string' &&
+    typeof candidate.currentBranch === 'string' &&
+    typeof candidate.head === 'string' &&
+    Array.isArray(candidate.branches) &&
+    Array.isArray(candidate.tags)
+  )
+}
+
+function isGitLiveLogResponseCandidate(value: unknown): value is GitLiveLogResponse {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const candidate = value as Partial<GitLiveLogResponse>
+  return typeof candidate.repo === 'string' && typeof candidate.ref === 'string' && Array.isArray(candidate.commits)
+}
+
 function toBranchDiffBucket(changeType: GitBranchCompareReport['files'][number]['changeType']): Exclude<BranchDiffView, 'off' | 'all'> {
   if (changeType === 'A') {
     return 'added'
@@ -736,6 +776,17 @@ function App() {
   const [gitBranchCompareReport, setGitBranchCompareReport] = useState<GitBranchCompareReport | null>(null)
   const [gitBranchCompareReportName, setGitBranchCompareReportName] = useState<string | null>(null)
   const [gitBranchCompareReportError, setGitBranchCompareReportError] = useState<string | null>(null)
+  const [gitLiveApiBase, setGitLiveApiBase] = useState('http://127.0.0.1:3031')
+  const [gitLiveRepoPath, setGitLiveRepoPath] = useState('')
+  const [gitLiveRefs, setGitLiveRefs] = useState<GitLiveRefsResponse | null>(null)
+  const [gitLiveBaseRef, setGitLiveBaseRef] = useState('main')
+  const [gitLiveTargetRef, setGitLiveTargetRef] = useState('HEAD')
+  const [gitLiveBaseCommits, setGitLiveBaseCommits] = useState<GitLiveCommit[]>([])
+  const [gitLiveTargetCommits, setGitLiveTargetCommits] = useState<GitLiveCommit[]>([])
+  const [gitLiveBaseCommitOverride, setGitLiveBaseCommitOverride] = useState('')
+  const [gitLiveTargetCommitOverride, setGitLiveTargetCommitOverride] = useState('')
+  const [isGitLiveLoading, setIsGitLiveLoading] = useState(false)
+  const [gitLiveError, setGitLiveError] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const treeLines = useMemo(() => buildTreeLines(scanResult?.tree ?? null), [scanResult])
   const fileLocByPath = useMemo(() => {
@@ -2955,6 +3006,117 @@ function App() {
     downloadTextFile(fileName, buildArchitectureMarkdownReport(architectureReport), 'text/markdown;charset=utf-8')
   }
 
+  function buildGitLiveUrl(path: string, params: Record<string, string>) {
+    const normalizedBase = gitLiveApiBase.trim().replace(/\/+$/, '')
+    const url = new URL(`${normalizedBase}${path}`)
+    for (const [key, value] of Object.entries(params)) {
+      url.searchParams.set(key, value)
+    }
+    return url.toString()
+  }
+
+  async function fetchGitLiveRefs() {
+    if (!gitLiveRepoPath.trim()) {
+      setGitLiveError('Set local git repository path first.')
+      return
+    }
+    setIsGitLiveLoading(true)
+    setGitLiveError(null)
+    try {
+      const response = await fetch(buildGitLiveUrl('/api/git/refs', { repo: gitLiveRepoPath.trim() }))
+      const parsed = (await response.json()) as unknown
+      if (!response.ok) {
+        throw new Error((parsed as { error?: string })?.error ?? `Git live refs error (${response.status}).`)
+      }
+      if (!isGitLiveRefsResponseCandidate(parsed)) {
+        throw new Error('Invalid refs response from git live server.')
+      }
+      setGitLiveRefs(parsed)
+      const fallbackBase = parsed.currentBranch || parsed.branches[0] || 'main'
+      setGitLiveBaseRef(fallbackBase)
+      setGitLiveTargetRef('HEAD')
+      setGitLiveBaseCommitOverride('')
+      setGitLiveTargetCommitOverride('')
+      await Promise.all([fetchGitLiveCommitsFor('base', fallbackBase), fetchGitLiveCommitsFor('target', 'HEAD')])
+    } catch (error) {
+      setGitLiveError(error instanceof Error ? error.message : 'Failed to load refs from git live server.')
+    } finally {
+      setIsGitLiveLoading(false)
+    }
+  }
+
+  async function fetchGitLiveCommitsFor(side: 'base' | 'target', ref: string) {
+    if (!gitLiveRepoPath.trim()) {
+      return
+    }
+    const response = await fetch(buildGitLiveUrl('/api/git/log', { repo: gitLiveRepoPath.trim(), ref, limit: '60' }))
+    const parsed = (await response.json()) as unknown
+    if (!response.ok) {
+      throw new Error((parsed as { error?: string })?.error ?? `Git live log error (${response.status}).`)
+    }
+    if (!isGitLiveLogResponseCandidate(parsed)) {
+      throw new Error('Invalid log response from git live server.')
+    }
+    if (side === 'base') {
+      setGitLiveBaseCommits(parsed.commits)
+    } else {
+      setGitLiveTargetCommits(parsed.commits)
+    }
+  }
+
+  async function refreshGitLiveCommits(side: 'base' | 'target') {
+    const ref = side === 'base' ? gitLiveBaseRef : gitLiveTargetRef
+    setIsGitLiveLoading(true)
+    setGitLiveError(null)
+    try {
+      await fetchGitLiveCommitsFor(side, ref)
+      if (side === 'base') {
+        setGitLiveBaseCommitOverride('')
+      } else {
+        setGitLiveTargetCommitOverride('')
+      }
+    } catch (error) {
+      setGitLiveError(error instanceof Error ? error.message : 'Failed to load commit history from git live server.')
+    } finally {
+      setIsGitLiveLoading(false)
+    }
+  }
+
+  async function runGitLiveCompare() {
+    if (!gitLiveRepoPath.trim()) {
+      setGitLiveError('Set local git repository path first.')
+      return
+    }
+    const base = gitLiveBaseCommitOverride || gitLiveBaseRef
+    const target = gitLiveTargetCommitOverride || gitLiveTargetRef
+    if (!base || !target) {
+      setGitLiveError('Select base and target refs/commits.')
+      return
+    }
+    setIsGitLiveLoading(true)
+    setGitLiveError(null)
+    try {
+      const response = await fetch(buildGitLiveUrl('/api/git/compare', { repo: gitLiveRepoPath.trim(), base, target }))
+      const parsed = (await response.json()) as unknown
+      if (!response.ok) {
+        throw new Error((parsed as { error?: string })?.error ?? `Git live compare error (${response.status}).`)
+      }
+      if (!isGitBranchCompareReportCandidate(parsed)) {
+        throw new Error('Invalid compare response from git live server.')
+      }
+      setGitBranchCompareReport(parsed)
+      setGitBranchCompareReportName(`live:${base}...${target}`)
+      setGitBranchCompareReportError(null)
+      if (branchDiffView === 'off') {
+        setBranchDiffView('all')
+      }
+    } catch (error) {
+      setGitLiveError(error instanceof Error ? error.message : 'Failed to compare refs via git live server.')
+    } finally {
+      setIsGitLiveLoading(false)
+    }
+  }
+
   async function importBaselineReport(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     if (!file) {
@@ -3363,7 +3525,137 @@ function App() {
 
             <div className="section-card">
               <h2>Git Branch Compare</h2>
-              <p>Import branch compare JSON generated via `npm run git-compare`.</p>
+              <p>Live compare from local git repo (no remote, no export) or import JSON report.</p>
+              <div className="git-live-grid">
+                <label className="git-live-field">
+                  Git API URL
+                  <input
+                    type="text"
+                    value={gitLiveApiBase}
+                    onChange={(event) => setGitLiveApiBase(event.target.value)}
+                    placeholder="http://127.0.0.1:3031"
+                  />
+                </label>
+                <label className="git-live-field">
+                  Local repo path
+                  <input
+                    type="text"
+                    value={gitLiveRepoPath}
+                    onChange={(event) => setGitLiveRepoPath(event.target.value)}
+                    placeholder="C:\\path\\to\\repo"
+                  />
+                </label>
+              </div>
+              <div className="actions">
+                <button type="button" onClick={fetchGitLiveRefs} disabled={isGitLiveLoading || !gitLiveRepoPath.trim()}>
+                  Load refs
+                </button>
+                <button
+                  type="button"
+                  onClick={runGitLiveCompare}
+                  disabled={isGitLiveLoading || !gitLiveRepoPath.trim() || !gitLiveBaseRef || !gitLiveTargetRef}
+                >
+                  Run live compare
+                </button>
+              </div>
+              {gitLiveRefs && (
+                <>
+                  <p>
+                    <strong>Repo:</strong> {gitLiveRefs.repo} | <strong>Current branch:</strong>{' '}
+                    {gitLiveRefs.currentBranch || '(detached)'}
+                  </p>
+                  <div className="git-live-grid">
+                    <label className="git-live-field">
+                      Base ref
+                      <select
+                        value={gitLiveBaseRef}
+                        onChange={(event) => {
+                          setGitLiveBaseRef(event.target.value)
+                          setGitLiveBaseCommitOverride('')
+                        }}
+                      >
+                        <option value="HEAD">HEAD</option>
+                        {gitLiveRefs.branches.map((branch) => (
+                          <option key={`base-branch-${branch}`} value={branch}>
+                            {branch}
+                          </option>
+                        ))}
+                        {gitLiveRefs.tags.map((tag) => (
+                          <option key={`base-tag-${tag}`} value={tag}>
+                            tag:{tag}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="git-live-field">
+                      Target ref
+                      <select
+                        value={gitLiveTargetRef}
+                        onChange={(event) => {
+                          setGitLiveTargetRef(event.target.value)
+                          setGitLiveTargetCommitOverride('')
+                        }}
+                      >
+                        <option value="HEAD">HEAD</option>
+                        {gitLiveRefs.branches.map((branch) => (
+                          <option key={`target-branch-${branch}`} value={branch}>
+                            {branch}
+                          </option>
+                        ))}
+                        {gitLiveRefs.tags.map((tag) => (
+                          <option key={`target-tag-${tag}`} value={tag}>
+                            tag:{tag}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="actions">
+                    <button type="button" onClick={() => refreshGitLiveCommits('base')} disabled={isGitLiveLoading || !gitLiveBaseRef}>
+                      Load base commits
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => refreshGitLiveCommits('target')}
+                      disabled={isGitLiveLoading || !gitLiveTargetRef}
+                    >
+                      Load target commits
+                    </button>
+                  </div>
+                  <div className="git-live-grid">
+                    <label className="git-live-field">
+                      Base commit override
+                      <select
+                        value={gitLiveBaseCommitOverride}
+                        onChange={(event) => setGitLiveBaseCommitOverride(event.target.value)}
+                      >
+                        <option value="">(use ref)</option>
+                        {gitLiveBaseCommits.map((commit) => (
+                          <option key={`base-commit-${commit.hash}`} value={commit.hash}>
+                            {commit.shortHash} · {commit.date} · {commit.subject}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="git-live-field">
+                      Target commit override
+                      <select
+                        value={gitLiveTargetCommitOverride}
+                        onChange={(event) => setGitLiveTargetCommitOverride(event.target.value)}
+                      >
+                        <option value="">(use ref)</option>
+                        {gitLiveTargetCommits.map((commit) => (
+                          <option key={`target-commit-${commit.hash}`} value={commit.hash}>
+                            {commit.shortHash} · {commit.date} · {commit.subject}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </>
+              )}
+              {gitLiveError && <p className="error">{gitLiveError}</p>}
+              <p>Or import branch compare JSON generated via `npm run git-compare`.</p>
               <div className="actions">
                 <input type="file" accept=".json,application/json" onChange={importGitBranchCompareReport} />
                 <button

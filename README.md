@@ -93,6 +93,28 @@ Optional arguments:
 - `--target <ref>`: target branch/ref (for example `feature/my-branch` or `HEAD`)
 - `--out <file>`: output JSON filename/path (relative to repo root by default)
 
+## Live Git Compare (Local Repo, No Export)
+
+Run local git API server:
+
+```bash
+npm run git-live
+```
+
+By default it starts on `http://127.0.0.1:3031` and exposes:
+
+- `GET /api/git/health`
+- `GET /api/git/refs?repo=<absolute-path>`
+- `GET /api/git/log?repo=<absolute-path>&ref=<ref>&limit=60`
+- `GET /api/git/compare?repo=<absolute-path>&base=<ref-or-hash>&target=<ref-or-hash>`
+
+Then in the app open `Diagnostics -> Git Branch Compare`:
+
+1. Set Git API URL and local repository path.
+2. Load refs.
+3. Choose base/target branch or commit overrides.
+4. Run live compare (result is applied directly to Board branch overlay).
+
 ## Browser Notes
 
 For folder selection, use a Chromium-based browser (Chrome/Edge) because this MVP relies on the File System Access API.

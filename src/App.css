@@ -445,6 +445,32 @@ button:disabled {
   width: fit-content;
 }
 
+.git-live-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.git-live-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #c3dced;
+  font-size: 0.83rem;
+}
+
+.git-live-field input,
+.git-live-field select {
+  width: 100%;
+  border: 1px solid rgba(96, 136, 173, 0.55);
+  border-radius: 8px;
+  background: rgba(4, 13, 24, 0.88);
+  color: #d7ebfb;
+  padding: 6px 8px;
+  font-size: 0.82rem;
+}
+
 .tree pre {
   margin: 0;
   border-radius: 10px;
@@ -885,6 +911,10 @@ button:disabled {
   }
 
   .board-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .git-live-grid {
     grid-template-columns: 1fr;
   }
 }

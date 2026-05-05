@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "smoke": "tsx scripts/smoke-test.ts",
     "git-churn": "tsx scripts/git-churn-report.ts",
-    "git-compare": "tsx scripts/git-branch-compare-report.ts"
+    "git-compare": "tsx scripts/git-branch-compare-report.ts",
+    "git-live": "tsx scripts/git-live-server.ts"
   },
   "dependencies": {
     "@xyflow/react": "^12.10.2",
