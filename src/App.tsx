@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
-import { Background, MiniMap, ReactFlow, type Edge, type NodeMouseHandler } from '@xyflow/react'
+import type { Edge, NodeMouseHandler } from '@xyflow/react'
+import { About } from './components/About'
+import { Architecture } from './components/Architecture'
+import { Board } from './components/Board'
 import { BusEdge } from './components/BusEdge'
-import { ClassicEdge } from './components/ClassicEdge'
-import { CanvasNavWheel } from './components/CanvasNavWheel'
 import { ChipFileNode } from './components/ChipFileNode'
+import { ClassicEdge } from './components/ClassicEdge'
+import { Dependencies } from './components/Dependencies'
+import { Diagnostics } from './components/Diagnostics'
 import { FolderBlockNode } from './components/FolderBlockNode'
-import {
-  ProjectStructureViz,
-  type StructureViewMode,
-  type TreemapMetricMode,
-} from './components/ProjectStructureViz'
+import { Overview } from './components/Overview'
+import { TabNav } from './components/TabNav'
+import type { StructureViewMode, TreemapMetricMode } from './components/ProjectStructureViz'
 import { analyzeProjectDependenciesInWorker } from './lib/analyzer-worker-client'
 import { computeBusRoutes } from './lib/bus-router'
 import { routeDirectOrthogonal } from './lib/direct-router'
@@ -47,13 +49,11 @@ import type {
 } from './types'
 
 import {
-  ARCHITECTURE_MATCHER_LAYERS,
   ARCHITECTURE_RULE_LAYERS,
   ARCHITECTURE_STORAGE_KEY,
   DEFAULT_ARCHITECTURE_CONFIG,
 } from './constants'
 
-import { architectureConfigDescription } from './utils/architecture-config-description'
 import { buildArchitectureMarkdownReport } from './utils/build-architecture-markdown-report'
 import { buildMarkdownReport } from './utils/build-markdown-report'
 import { detectArchitectureLayer } from './utils/detect-architecture-layer'
@@ -1961,7 +1961,7 @@ function App() {
     return fileNodeToBlockId.get(selectedNodeId) ?? null
   }, [selectedNodeId, fileNodeToBlockId])
 
-  const hoveredFileAnalysis = hoveredFilePath ? fileAnalysisByPath.get(hoveredFilePath) : null
+  const hoveredFileAnalysis = hoveredFilePath ? fileAnalysisByPath.get(hoveredFilePath) ?? null : null
   const hoverInfoLine = hoveredFileAnalysis
     ? `${hoveredFilePath ?? '-'} | Exports: ${
         hoveredFileAnalysis.exports.length > 0 ? hoveredFileAnalysis.exports.join(', ') : 'none'
@@ -2481,1402 +2481,215 @@ function App() {
 
   return (
     <main className="app-shell">
-      <section className="panel tab-nav">
-        <button type="button" className={activeTab === 'overview' ? 'is-active' : ''} onClick={() => setActiveTab('overview')}>
-          Overview
-        </button>
-        <button type="button" className={activeTab === 'board' ? 'is-active' : ''} onClick={() => setActiveTab('board')}>
-          Board
-        </button>
-        <button
-          type="button"
-          className={activeTab === 'dependencies' ? 'is-active' : ''}
-          onClick={() => setActiveTab('dependencies')}
-        >
-          Dependencies
-        </button>
-        <button
-          type="button"
-          className={activeTab === 'diagnostics' ? 'is-active' : ''}
-          onClick={() => setActiveTab('diagnostics')}
-        >
-          Diagnostics
-        </button>
-        <button
-          type="button"
-          className={activeTab === 'architecture' ? 'is-active' : ''}
-          onClick={() => setActiveTab('architecture')}
-        >
-          Architecture
-        </button>
-        <button
-          type="button"
-          className={activeTab === 'about' ? 'is-active' : ''}
-          onClick={() => setActiveTab('about')}
-        >
-          About
-        </button>
-      </section>
+      <TabNav activeTab={activeTab} setActiveTab={setActiveTab} />
 
       {activeTab === 'overview' && (
-        <section className="panel grid">
-          <div className="stats">
-            <h2>Project Selection</h2>
-            <div className="actions">
-              <button type="button" onClick={handlePickDirectory} disabled={isBusy}>
-                {pickButtonLabel()}
-              </button>
-              <span className="hint">Supported: `.ts`, `.tsx`; excludes `node_modules`, `.git`, `dist`, `build`.</span>
-            </div>
-            {errorMessage && <p className="error">{errorMessage}</p>}
-            <h2>Scan Summary</h2>
-            <p>
-              <strong>Root:</strong> {scanResult?.rootName ?? '-'}
-            </p>
-            <p>
-              <strong>Directories:</strong> {scanResult?.directoryCount ?? 0}
-            </p>
-            <p>
-              <strong>TS Files:</strong> {scanResult?.tsFileCount ?? 0}
-            </p>
-            <p>
-              <strong>Dependency Edges:</strong> {dependencyGraph?.edges.length ?? 0}
-            </p>
-            <p>
-              <strong>Cycles:</strong> {flowGraph?.cycleEdgeCount ?? 0}
-            </p>
-            <p>
-              <strong>Search Matches:</strong> {matchingFileNodeIds.size}
-            </p>
-          </div>
-          <div className="overview-visual-stack">
-            <div className="overview-viz-panel">
-              <div className="overview-viz-header">
-                <h2>Structure View</h2>
-                <div className="overview-viz-controls">
-                  <label className="toggle-row">
-                    View
-                    <select
-                      value={overviewStructureMode}
-                      onChange={(event) => setOverviewStructureMode(event.target.value as StructureViewMode)}
-                    >
-                      <option value="treemap">treemap</option>
-                      <option value="dendrogram">dendrogram</option>
-                      <option value="tree">tree</option>
-                    </select>
-                  </label>
-                  <label className="toggle-row">
-                    Size
-                    <select
-                      value={overviewTreemapMetric}
-                      onChange={(event) => setOverviewTreemapMetric(event.target.value as TreemapMetricMode)}
-                      disabled={overviewStructureMode !== 'treemap'}
-                    >
-                      <option value="files">files</option>
-                      <option value="loc">loc</option>
-                    </select>
-                  </label>
-                </div>
-              </div>
-              <ProjectStructureViz
-                tree={scanResult?.tree ?? null}
-                mode={overviewStructureMode}
-                treemapMetric={overviewTreemapMetric}
-                fileValueByPath={fileLocByPath}
-                treeLines={treeLines}
-              />
-            </div>
-          </div>
-        </section>
+        <Overview
+          scanResult={scanResult}
+          dependencyGraph={dependencyGraph}
+          flowGraph={flowGraph}
+          matchingFileNodeIds={matchingFileNodeIds}
+          isBusy={isBusy}
+          errorMessage={errorMessage}
+          pickButtonLabel={pickButtonLabel}
+          handlePickDirectory={handlePickDirectory}
+          overviewStructureMode={overviewStructureMode}
+          setOverviewStructureMode={setOverviewStructureMode}
+          overviewTreemapMetric={overviewTreemapMetric}
+          setOverviewTreemapMetric={setOverviewTreemapMetric}
+          fileLocByPath={fileLocByPath}
+          treeLines={treeLines}
+        />
       )}
 
       {activeTab === 'about' && (
-        <section className="panel grid about-grid">
-          <div className="stats">
-            <div className="section-card">
-              <h2>About This App</h2>
-              <p>
-                Schematic Code Visualizer analyzes a selected TypeScript project and renders structure + dependency
-                relations as a board-like diagram.
-              </p>
-              <p>
-                <strong>Core idea:</strong> files as components, imports/exports as routing, folders as logical blocks.
-              </p>
-              <p>
-                <strong>Current focus:</strong> readability modes (`classic` / `bus`), hierarchy-aware grouping, and
-                interactive exploration.
-              </p>
-            </div>
-
-            <div className="section-card">
-              <h2>Project Context</h2>
-              <p>
-                <strong>Selected project:</strong> {scanResult?.rootName ?? '-'}
-              </p>
-              <p>
-                <strong>README:</strong> {projectReadmeName ?? 'not found in project root'}
-              </p>
-            </div>
-          </div>
-
-          <div className="right-stack">
-            <div className="section-card tree">
-              <h2>Project README</h2>
-              <pre className="report-pre">{projectReadmeContent ?? 'README.md not found or not loaded yet.'}</pre>
-            </div>
-          </div>
-        </section>
+        <About
+          scanResult={scanResult}
+          projectReadmeName={projectReadmeName}
+          projectReadmeContent={projectReadmeContent}
+        />
       )}
 
       {activeTab === 'dependencies' && (
-        <section className="panel grid dependencies-grid">
-          <div className="stats">
-            <div className="section-card">
-              <h2>Top Connected Files</h2>
-              {topConnectedFiles.length > 0 ? (
-                <ul className="flat-list">
-                  {topConnectedFiles.map((file) => (
-                    <li key={file.path}>
-                      <code>{file.path}</code> ({file.resolvedImports.length} links, {file.exports.length} exports)
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p>No dependency data yet.</p>
-              )}
-            </div>
-          </div>
-
-          <div className="right-stack">
-            <div className="section-card tree">
-              <h2>Dependency Preview (first 20 edges)</h2>
-              <pre className="report-pre">
-                {previewEdges.length > 0
-                  ? previewEdges.map((edge) => `${edge.fromPath} -> ${edge.toPath}`).join('\n')
-                  : 'Scan a folder to generate dependency edges.'}
-              </pre>
-            </div>
-          </div>
-        </section>
+        <Dependencies topConnectedFiles={topConnectedFiles} previewEdges={previewEdges} />
       )}
 
       {activeTab === 'diagnostics' && (
-        <section className="panel grid diagnostics-grid">
-          <div className="stats">
-            <div className="section-card">
-              <h2>Resolver Diagnostics</h2>
-              <p>
-                <strong>Unresolved Imports:</strong> {dependencyGraph?.unresolvedImportCount ?? 0}
-              </p>
-              <p>
-                <strong>Unresolved External:</strong> {dependencyGraph?.unresolvedExternalCount ?? 0}
-              </p>
-              <p>
-                <strong>Unresolved Internal:</strong> {dependencyGraph?.unresolvedInternalCount ?? 0}
-              </p>
-              <p>
-                <strong>Alias Resolved:</strong> {dependencyGraph?.aliasResolvedCount ?? 0}
-              </p>
-              <p>
-                <strong>Layout Status:</strong> {isLayouting ? 'running' : 'ready'}
-              </p>
-            </div>
-
-            <div className="section-card">
-              <h2>Export Report</h2>
-              <p>Save current diagnostics snapshot as JSON or Markdown.</p>
-              <div className="actions">
-                <button type="button" onClick={exportAnalysisReportJson} disabled={!scanResult || !dependencyGraph}>
-                  Export JSON
-                </button>
-                <button type="button" onClick={exportAnalysisReportMarkdown} disabled={!scanResult || !dependencyGraph}>
-                  Export Markdown
-                </button>
-              </div>
-            </div>
-
-            <div className="section-card">
-              <h2>Compare with Baseline</h2>
-              <p>Import a previously exported analysis JSON to see deltas.</p>
-              <div className="actions">
-                <input type="file" accept=".json,application/json" onChange={importBaselineReport} />
-                <button
-                  type="button"
-                  onClick={() => {
-                    setBaselineReport(null)
-                    setBaselineReportName(null)
-                    setBaselineReportError(null)
-                  }}
-                  disabled={!baselineReport}
-                >
-                  Clear baseline
-                </button>
-              </div>
-              {baselineReportName && (
-                <p>
-                  <strong>Loaded:</strong> {baselineReportName}
-                </p>
-              )}
-              {baselineReportError && <p className="error">{baselineReportError}</p>}
-              {baselineDelta && (
-                <ul className="flat-list">
-                  <li>
-                    <strong>TS Files:</strong> {baselineDelta.tsFiles >= 0 ? '+' : ''}
-                    {baselineDelta.tsFiles}
-                  </li>
-                  <li>
-                    <strong>Dependency Edges:</strong> {baselineDelta.dependencyEdges >= 0 ? '+' : ''}
-                    {baselineDelta.dependencyEdges}
-                  </li>
-                  <li>
-                    <strong>Cycle Edges:</strong> {baselineDelta.cycleEdges >= 0 ? '+' : ''}
-                    {baselineDelta.cycleEdges}
-                  </li>
-                  <li>
-                    <strong>Unresolved Imports:</strong> {baselineDelta.unresolvedImports >= 0 ? '+' : ''}
-                    {baselineDelta.unresolvedImports}
-                  </li>
-                  <li>
-                    <strong>Architecture Violations:</strong> {baselineDelta.architectureViolations >= 0 ? '+' : ''}
-                    {baselineDelta.architectureViolations}
-                  </li>
-                </ul>
-              )}
-            </div>
-
-            <div className="section-card">
-              <h2>Git Churn</h2>
-              <p>Import git churn JSON generated via `npm run git-churn`.</p>
-              <div className="actions">
-                <input type="file" accept=".json,application/json" onChange={importGitChurnReport} />
-                <button
-                  type="button"
-                  onClick={() => {
-                    setGitChurnReport(null)
-                    setGitChurnReportName(null)
-                    setGitChurnReportError(null)
-                  }}
-                  disabled={!gitChurnReport}
-                >
-                  Clear churn
-                </button>
-              </div>
-              {gitChurnReportName && (
-                <p>
-                  <strong>Loaded:</strong> {gitChurnReportName}
-                </p>
-              )}
-              {gitChurnReport && (
-                <p>
-                  <strong>Since:</strong> {gitChurnReport.since} | <strong>Files:</strong> {gitChurnReport.files.length}
-                </p>
-              )}
-              {gitChurnReportError && <p className="error">{gitChurnReportError}</p>}
-              {churnHotFiles.length > 0 && (
-                <>
-                  <h2>Churn Hotspots</h2>
-                  <ul className="quick-action-list">
-                    {churnHotFiles.slice(0, 8).map((item) => (
-                      <li key={`churn-${item.path}`}>
-                        <code>{item.path}</code>
-                        <button type="button" className="quick-action-button" onClick={() => focusFileOnBoard(item.path)}>
-                          Show on Board
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-            </div>
-
-            <div className="section-card">
-              <h2>Git Branch Compare</h2>
-              <p>Live compare from local git repo (no remote, no export) or import JSON report.</p>
-              <div className="git-live-grid">
-                <label className="git-live-field">
-                  Git API URL
-                  <input
-                    type="text"
-                    value={gitLiveApiBase}
-                    onChange={(event) => setGitLiveApiBase(event.target.value)}
-                    placeholder="http://127.0.0.1:3031"
-                  />
-                </label>
-                <label className="git-live-field">
-                  Local repo path
-                  <input
-                    type="text"
-                    value={gitLiveRepoPath}
-                    onChange={(event) => setGitLiveRepoPath(event.target.value)}
-                    placeholder="C:\\path\\to\\repo"
-                  />
-                </label>
-              </div>
-              <div className="actions">
-                <button type="button" onClick={fetchGitLiveRefs} disabled={isGitLiveLoading || !gitLiveRepoPath.trim()}>
-                  Load refs
-                </button>
-                <button
-                  type="button"
-                  onClick={runGitLiveCompare}
-                  disabled={isGitLiveLoading || !gitLiveRepoPath.trim() || !gitLiveBaseRef || !gitLiveTargetRef}
-                >
-                  Run live compare
-                </button>
-              </div>
-              {gitLiveRefs && (
-                <>
-                  <p>
-                    <strong>Repo:</strong> {gitLiveRefs.repo} | <strong>Current branch:</strong>{' '}
-                    {gitLiveRefs.currentBranch || '(detached)'}
-                  </p>
-                  <div className="git-live-grid">
-                    <label className="git-live-field">
-                      Base ref
-                      <select
-                        value={gitLiveBaseRef}
-                        onChange={(event) => {
-                          setGitLiveBaseRef(event.target.value)
-                          setGitLiveBaseCommitOverride('')
-                        }}
-                      >
-                        <option value="HEAD">HEAD</option>
-                        {gitLiveRefs.branches.map((branch) => (
-                          <option key={`base-branch-${branch}`} value={branch}>
-                            {branch}
-                          </option>
-                        ))}
-                        {gitLiveRefs.tags.map((tag) => (
-                          <option key={`base-tag-${tag}`} value={tag}>
-                            tag:{tag}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="git-live-field">
-                      Target ref
-                      <select
-                        value={gitLiveTargetRef}
-                        onChange={(event) => {
-                          setGitLiveTargetRef(event.target.value)
-                          setGitLiveTargetCommitOverride('')
-                        }}
-                      >
-                        <option value="HEAD">HEAD</option>
-                        {gitLiveRefs.branches.map((branch) => (
-                          <option key={`target-branch-${branch}`} value={branch}>
-                            {branch}
-                          </option>
-                        ))}
-                        {gitLiveRefs.tags.map((tag) => (
-                          <option key={`target-tag-${tag}`} value={tag}>
-                            tag:{tag}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  <div className="actions">
-                    <button type="button" onClick={() => refreshGitLiveCommits('base')} disabled={isGitLiveLoading || !gitLiveBaseRef}>
-                      Load base commits
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => refreshGitLiveCommits('target')}
-                      disabled={isGitLiveLoading || !gitLiveTargetRef}
-                    >
-                      Load target commits
-                    </button>
-                  </div>
-                  <div className="git-live-grid">
-                    <label className="git-live-field">
-                      Base commit override
-                      <select
-                        value={gitLiveBaseCommitOverride}
-                        onChange={(event) => setGitLiveBaseCommitOverride(event.target.value)}
-                      >
-                        <option value="">(use ref)</option>
-                        {gitLiveBaseCommits.map((commit) => (
-                          <option key={`base-commit-${commit.hash}`} value={commit.hash}>
-                            {commit.shortHash} · {commit.date} · {commit.subject}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="git-live-field">
-                      Target commit override
-                      <select
-                        value={gitLiveTargetCommitOverride}
-                        onChange={(event) => setGitLiveTargetCommitOverride(event.target.value)}
-                      >
-                        <option value="">(use ref)</option>
-                        {gitLiveTargetCommits.map((commit) => (
-                          <option key={`target-commit-${commit.hash}`} value={commit.hash}>
-                            {commit.shortHash} · {commit.date} · {commit.subject}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                </>
-              )}
-              {gitLiveError && <p className="error">{gitLiveError}</p>}
-              <p>Or import branch compare JSON generated via `npm run git-compare`.</p>
-              <div className="actions">
-                <input type="file" accept=".json,application/json" onChange={importGitBranchCompareReport} />
-                <button
-                  type="button"
-                  onClick={() => {
-                    setGitBranchCompareReport(null)
-                    setGitBranchCompareReportName(null)
-                    setGitBranchCompareReportError(null)
-                    setBranchDiffView('off')
-                    setHighlightOnlyChangedBranchEdges(false)
-                  }}
-                  disabled={!gitBranchCompareReport}
-                >
-                  Clear compare
-                </button>
-              </div>
-              {gitBranchCompareReportName && (
-                <p>
-                  <strong>Loaded:</strong> {gitBranchCompareReportName}
-                </p>
-              )}
-              {gitBranchCompareReport && (
-                <p>
-                  <strong>Range:</strong> {gitBranchCompareReport.baseRef}...{gitBranchCompareReport.targetRef} |{' '}
-                  <strong>Changed files:</strong> {gitBranchCompareReport.summary.changedFiles} | <strong>Churn:</strong>{' '}
-                  {gitBranchCompareReport.summary.totalChurn}
-                </p>
-              )}
-              {gitBranchCompareReportError && <p className="error">{gitBranchCompareReportError}</p>}
-              {branchCompareHotFiles.length > 0 && (
-                <>
-                  <h2>Changed Hotspots</h2>
-                  <ul className="quick-action-list">
-                    {branchCompareHotFiles.slice(0, 8).map((item) => (
-                      <li key={`branch-compare-${item.path}`}>
-                        <code>{item.path}</code>
-                        <button type="button" className="quick-action-button" onClick={() => focusFileOnBoard(item.path)}>
-                          Show on Board
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-            </div>
-
-            <div className="section-card">
-              <h2>Code Health (MVP)</h2>
-              <p>
-                <strong>Hotspots:</strong> {hotspotFiles.length}
-              </p>
-              <p>
-                <strong>Potential dead export files:</strong> {potentiallyDeadExportFiles.length}
-              </p>
-              <p>
-                <strong>Cycle groups:</strong> {topCycleGroups.length}
-              </p>
-              <p>
-                <strong>Edge kinds:</strong> runtime {dependencyEdgeKindCounts.runtime}, type {dependencyEdgeKindCounts.type},
-                re-export {dependencyEdgeKindCounts['re-export']}
-              </p>
-              <p>
-                <strong>Risky files:</strong> {riskByFile.length}
-              </p>
-              <p>
-                <strong>Risky blocks:</strong> {riskByBlock.length}
-              </p>
-            </div>
-
-            <div className="section-card">
-              <h2>Refactor Signals</h2>
-              <p>
-                <strong>Orphan runtime modules:</strong> {orphanRuntimeModules.length}
-              </p>
-              <p>
-                <strong>Re-export hubs:</strong> {reexportHubFiles.length}
-              </p>
-              <p>
-                <strong>Duplicate utility groups:</strong> {duplicateUtilityGroups.length}
-              </p>
-              <p>
-                <strong>Re-export bottlenecks:</strong> {reexportBottleneckFiles.length}
-              </p>
-              <p>
-                <strong>Re-export chains:</strong> {reexportChains.length}
-              </p>
-              {orphanRuntimeModules.length > 0 && (
-                <>
-                  <h2>Orphan Candidates</h2>
-                  <ul className="quick-action-list">
-                    {orphanRuntimeModules.slice(0, 8).map((item) => (
-                      <li key={`orphan-${item.path}`}>
-                        <code>{item.path}</code>
-                        <button type="button" className="quick-action-button" onClick={() => focusFileOnBoard(item.path)}>
-                          Show on Board
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-              {reexportHubFiles.length > 0 && (
-                <>
-                  <h2>Re-export Hubs</h2>
-                  <ul className="quick-action-list">
-                    {reexportHubFiles.slice(0, 8).map((item) => (
-                      <li key={`rehub-${item.path}`}>
-                        <code>{item.path}</code>
-                        <button type="button" className="quick-action-button" onClick={() => focusFileOnBoard(item.path)}>
-                          Show on Board
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-              {reexportBottleneckFiles.length > 0 && (
-                <>
-                  <h2>Re-export Bottlenecks</h2>
-                  <ul className="quick-action-list">
-                    {reexportBottleneckFiles.slice(0, 8).map((item) => (
-                      <li key={`rebot-${item.path}`}>
-                        <code>{item.path}</code>
-                        <button type="button" className="quick-action-button" onClick={() => focusFileOnBoard(item.path)}>
-                          Show on Board
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-            </div>
-
-            <div className="section-card">
-              <h2>Architecture Rules</h2>
-              <ul className="rule-list">
-                {architectureRuleLines.map((line) => (
-                  <li key={`diag-rule-${line}`}>{line}</li>
-                ))}
-              </ul>
-              <p>
-                <strong>Violations:</strong> {architectureViolations.length}
-              </p>
-              <p>
-                <strong>Violations by kind:</strong> runtime {architectureViolationByKind.runtime}, type{' '}
-                {architectureViolationByKind.type}, re-export {architectureViolationByKind['re-export']}
-              </p>
-              <p>
-                <strong>Layer distribution:</strong> ui {architectureLayerDistribution.ui}, domain {architectureLayerDistribution.domain},
-                infra {architectureLayerDistribution.infra}, shared {architectureLayerDistribution.shared}, tests{' '}
-                {architectureLayerDistribution.tests}, unknown {architectureLayerDistribution.unknown}
-              </p>
-            </div>
-          </div>
-          <div className="tree right-stack">
-            <div className="section-card">
-              <h2>Code Health Details</h2>
-              <pre className="report-pre">
-                Hotspots (score = in*2 + out + LOC factor):
-                {hotspotFiles.length > 0
-                  ? `\n${hotspotFiles
-                      .map(
-                        (item) =>
-                          `- ${item.path} | score=${item.score} | in=${item.incoming} | out=${item.outgoing} | loc=${item.loc}`,
-                      )
-                      .join('\n')}`
-                  : '\n- no data'}
-                {'\n\n'}
-                Potential dead export files (no internal incoming edges):
-                {potentiallyDeadExportFiles.length > 0
-                  ? `\n${potentiallyDeadExportFiles
-                      .map((file) => `- ${file.path} | exports=${file.exports.length} | symbols=${file.exports.join(', ')}`)
-                      .join('\n')}`
-                  : '\n- no candidates'}
-                {'\n\n'}
-                Top cycle groups:
-                {topCycleGroups.length > 0
-                  ? `\n${topCycleGroups
-                      .map((group) => `- cycle-${group.id} | size=${group.size} | ${group.filePaths.join(' -> ')}`)
-                      .join('\n')}`
-                  : '\n- no cycles'}
-              </pre>
-            </div>
-
-            <div className="section-card">
-              <h2>Risk & Refactor</h2>
-              <pre className="report-pre">
-                Dependency Quality Risk (files):
-                {riskByFile.length > 0
-                  ? `\n${riskByFile
-                      .map(
-                        (item) =>
-                          `- ${item.path} | score=${item.score} | runtime ${item.incomingRuntime}/${item.outgoingRuntime} | type ${item.incomingType}/${item.outgoingType} | re-export ${item.incomingReexport}/${item.outgoingReexport}`,
-                      )
-                      .join('\n')}`
-                  : '\n- no data'}
-                {'\n\n'}
-                Dependency Quality Risk (blocks):
-                {riskByBlock.length > 0
-                  ? `\n${riskByBlock
-                      .map(
-                        (item) =>
-                          `- ${item.label} | score=${item.score} | files=${item.fileCount} | cross runtime in=${item.incomingCrossBlockRuntime} out=${item.outgoingCrossBlockRuntime}`,
-                      )
-                      .join('\n')}`
-                  : '\n- no data'}
-                {'\n\n'}
-                Refactor signals - orphan runtime modules:
-                {orphanRuntimeModules.length > 0
-                  ? `\n${orphanRuntimeModules
-                      .map(
-                        (item) =>
-                          `- ${item.path} | exports=${item.exports} | typeTouches=${item.typeTouches} | reexportTouches=${item.reexportTouches}`,
-                      )
-                      .join('\n')}`
-                  : '\n- no candidates'}
-                {'\n\n'}
-                Refactor signals - re-export hubs:
-                {reexportHubFiles.length > 0
-                  ? `\n${reexportHubFiles
-                      .map(
-                        (item) =>
-                          `- ${item.path} | re-export out=${item.outgoingReexport} | runtime in=${item.incomingRuntime} | exports=${item.exports}`,
-                      )
-                      .join('\n')}`
-                  : '\n- no candidates'}
-                {'\n\n'}
-                Refactor signals - duplicate utility groups:
-                {duplicateUtilityGroups.length > 0
-                  ? `\n${duplicateUtilityGroups
-                      .map((group) => `- ${group.baseName} [${group.hash}] | ${group.paths.join(' | ')}`)
-                      .join('\n')}`
-                  : '\n- no candidates'}
-                {'\n\n'}
-                Refactor signals - re-export bottlenecks:
-                {reexportBottleneckFiles.length > 0
-                  ? `\n${reexportBottleneckFiles
-                      .map(
-                        (item) =>
-                          `- ${item.path} | score=${item.score} | runtime-in=${item.incomingRuntime} | reexport-in=${item.incomingReexport} | reexport-out=${item.outgoingReexport}`,
-                      )
-                      .join('\n')}`
-                  : '\n- no candidates'}
-                {'\n\n'}
-                Refactor signals - re-export chains:
-                {reexportChains.length > 0 ? `\n${reexportChains.map((chain) => `- ${chain}`).join('\n')}` : '\n- no chains'}
-                {'\n\n'}
-                Git churn hotspots (weighted by centrality):
-                {churnHotFiles.length > 0
-                  ? `\n${churnHotFiles
-                      .map(
-                        (item) =>
-                          `- ${item.path} | weighted=${item.weighted} | churn=${item.churn} | commits=${item.commits} | centrality=${item.centrality}`,
-                      )
-                      .join('\n')}`
-                  : '\n- churn report not loaded'}
-                {'\n\n'}
-                Branch compare hotspots (weighted by centrality):
-                {branchCompareHotFiles.length > 0
-                  ? `\n${branchCompareHotFiles
-                      .map(
-                        (item) =>
-                          `- ${item.path} | ${item.changeType} | weighted=${item.weighted} | churn=${item.churn} | +${item.additions}/-${item.deletions} | centrality=${item.centrality}`,
-                      )
-                      .join('\n')}`
-                  : '\n- branch compare report not loaded'}
-              </pre>
-            </div>
-
-            <div className="section-card">
-              <h2>Architecture & Selection</h2>
-              <pre className="report-pre">
-                Baseline diff:
-                {baselineDelta
-                  ? `\n- files ${baselineDelta.tsFiles >= 0 ? '+' : ''}${baselineDelta.tsFiles}
-- dirs ${baselineDelta.directories >= 0 ? '+' : ''}${baselineDelta.directories}
-- edges ${baselineDelta.dependencyEdges >= 0 ? '+' : ''}${baselineDelta.dependencyEdges}
-- cycles ${baselineDelta.cycleEdges >= 0 ? '+' : ''}${baselineDelta.cycleEdges}
-- unresolved ${baselineDelta.unresolvedImports >= 0 ? '+' : ''}${baselineDelta.unresolvedImports}
-- arch violations ${baselineDelta.architectureViolations >= 0 ? '+' : ''}${baselineDelta.architectureViolations}
-- edge kinds runtime ${baselineDelta.edgeKinds.runtime >= 0 ? '+' : ''}${baselineDelta.edgeKinds.runtime}, type ${baselineDelta.edgeKinds.type >= 0 ? '+' : ''}${baselineDelta.edgeKinds.type}, re-export ${baselineDelta.edgeKinds['re-export'] >= 0 ? '+' : ''}${baselineDelta.edgeKinds['re-export']}`
-                  : '\n- baseline not loaded'}
-                {'\n\n'}
-                Architecture rule set:
-                {'\n'}- {architectureConfigDescription(architectureConfig)}
-                {'\n\n'}
-                Architecture violations by layer pair:
-                {architectureViolationByPair.length > 0
-                  ? `\n${architectureViolationByPair.map(([pair, count]) => `- ${pair}: ${count}`).join('\n')}`
-                  : '\n- no violations'}
-                {'\n\n'}
-                Architecture violations (sample):
-                {architectureViolations.length > 0
-                  ? `\n${architectureViolations
-                      .slice(0, 20)
-                      .map(
-                        (item) =>
-                          `- [${item.kind}] ${item.fromLayer}->${item.toLayer} | ${item.fromPath} -> ${item.toPath}`,
-                      )
-                      .join('\n')}`
-                  : '\n- no violations'}
-                {'\n\n'}
-                Selection / Hover:
-                {'\n'}
-                {selectedNodeId ? `Selected: ${selectedNodeId}\n` : 'Selected: -\n'}
-                {hoveredFilePath ? `Hover: ${hoveredFilePath}\n` : 'Hover: -\n'}
-                {hoveredFileAnalysis
-                  ? `Exports: ${
-                      hoveredFileAnalysis.exports.length > 0 ? hoveredFileAnalysis.exports.join(', ') : 'none'
-                    }`
-                  : 'Exports: -'}
-              </pre>
-            </div>
-          </div>
-        </section>
+        <Diagnostics
+          dependencyGraph={dependencyGraph}
+          isLayouting={isLayouting}
+          scanResult={scanResult}
+          exportAnalysisReportJson={exportAnalysisReportJson}
+          exportAnalysisReportMarkdown={exportAnalysisReportMarkdown}
+          importBaselineReport={importBaselineReport}
+          baselineReport={baselineReport}
+          setBaselineReport={setBaselineReport}
+          baselineReportName={baselineReportName}
+          setBaselineReportName={setBaselineReportName}
+          baselineReportError={baselineReportError}
+          setBaselineReportError={setBaselineReportError}
+          baselineDelta={baselineDelta}
+          importGitChurnReport={importGitChurnReport}
+          gitChurnReport={gitChurnReport}
+          setGitChurnReport={setGitChurnReport}
+          gitChurnReportName={gitChurnReportName}
+          setGitChurnReportName={setGitChurnReportName}
+          gitChurnReportError={gitChurnReportError}
+          setGitChurnReportError={setGitChurnReportError}
+          churnHotFiles={churnHotFiles}
+          gitLiveApiBase={gitLiveApiBase}
+          setGitLiveApiBase={setGitLiveApiBase}
+          gitLiveRepoPath={gitLiveRepoPath}
+          setGitLiveRepoPath={setGitLiveRepoPath}
+          fetchGitLiveRefs={fetchGitLiveRefs}
+          runGitLiveCompare={runGitLiveCompare}
+          isGitLiveLoading={isGitLiveLoading}
+          gitLiveRefs={gitLiveRefs}
+          gitLiveBaseRef={gitLiveBaseRef}
+          setGitLiveBaseRef={setGitLiveBaseRef}
+          gitLiveTargetRef={gitLiveTargetRef}
+          setGitLiveTargetRef={setGitLiveTargetRef}
+          refreshGitLiveCommits={refreshGitLiveCommits}
+          gitLiveBaseCommitOverride={gitLiveBaseCommitOverride}
+          setGitLiveBaseCommitOverride={setGitLiveBaseCommitOverride}
+          gitLiveTargetCommitOverride={gitLiveTargetCommitOverride}
+          setGitLiveTargetCommitOverride={setGitLiveTargetCommitOverride}
+          gitLiveBaseCommits={gitLiveBaseCommits}
+          gitLiveTargetCommits={gitLiveTargetCommits}
+          gitLiveError={gitLiveError}
+          importGitBranchCompareReport={importGitBranchCompareReport}
+          gitBranchCompareReport={gitBranchCompareReport}
+          setGitBranchCompareReport={setGitBranchCompareReport}
+          gitBranchCompareReportName={gitBranchCompareReportName}
+          setGitBranchCompareReportName={setGitBranchCompareReportName}
+          gitBranchCompareReportError={gitBranchCompareReportError}
+          setGitBranchCompareReportError={setGitBranchCompareReportError}
+          setBranchDiffView={setBranchDiffView}
+          setHighlightOnlyChangedBranchEdges={setHighlightOnlyChangedBranchEdges}
+          branchCompareHotFiles={branchCompareHotFiles}
+          hotspotFiles={hotspotFiles}
+          potentiallyDeadExportFiles={potentiallyDeadExportFiles}
+          topCycleGroups={topCycleGroups}
+          dependencyEdgeKindCounts={dependencyEdgeKindCounts}
+          riskByFile={riskByFile}
+          riskByBlock={riskByBlock}
+          orphanRuntimeModules={orphanRuntimeModules}
+          reexportHubFiles={reexportHubFiles}
+          duplicateUtilityGroups={duplicateUtilityGroups}
+          reexportBottleneckFiles={reexportBottleneckFiles}
+          reexportChains={reexportChains}
+          architectureRuleLines={architectureRuleLines}
+          architectureViolations={architectureViolations}
+          architectureViolationByKind={architectureViolationByKind}
+          architectureLayerDistribution={architectureLayerDistribution}
+          architectureViolationByPair={architectureViolationByPair}
+          architectureConfig={architectureConfig}
+          selectedNodeId={selectedNodeId}
+          hoveredFilePath={hoveredFilePath}
+          hoveredFileAnalysis={hoveredFileAnalysis}
+          focusFileOnBoard={focusFileOnBoard}
+        />
       )}
 
       {activeTab === 'architecture' && (
-        <section className="panel grid architecture-grid">
-          <div className="stats">
-            <div className="section-card">
-              <h2>Architecture Rules</h2>
-              <ul className="rule-list">
-                {architectureRuleLines.map((line) => (
-                  <li key={`arch-rule-${line}`}>{line}</li>
-                ))}
-              </ul>
-              <p>
-                <strong>Violations:</strong> {architectureViolations.length}
-              </p>
-              <p>
-                <strong>Violations by kind:</strong> runtime {architectureViolationByKind.runtime}, type{' '}
-                {architectureViolationByKind.type}, re-export {architectureViolationByKind['re-export']}
-              </p>
-              <p>
-                <strong>Layer distribution:</strong> ui {architectureLayerDistribution.ui}, domain {architectureLayerDistribution.domain},
-                infra {architectureLayerDistribution.infra}, shared {architectureLayerDistribution.shared}, tests{' '}
-                {architectureLayerDistribution.tests}, unknown {architectureLayerDistribution.unknown}
-              </p>
-            </div>
-
-            <div className="section-card">
-              <h2>Architecture Config</h2>
-              <div className="architecture-config-panel">
-                <div className="architecture-config-mode">
-                  <button
-                    type="button"
-                    className={architectureConfigMode === 'visual' ? 'is-active' : ''}
-                    onClick={() => setArchitectureConfigMode('visual')}
-                  >
-                    Visual
-                  </button>
-                  <button
-                    type="button"
-                    className={architectureConfigMode === 'json' ? 'is-active' : ''}
-                    onClick={() => setArchitectureConfigMode('json')}
-                  >
-                    Advanced JSON
-                  </button>
-                </div>
-                {architectureConfigMode === 'visual' ? (
-                  <div className="architecture-visual-editor">
-                    <p className="hint">
-                      Layer matchers (comma-separated path fragments). First matched layer in priority order wins.
-                    </p>
-                    {ARCHITECTURE_MATCHER_LAYERS.map((layer) => (
-                      <label key={layer} className="architecture-matcher-row">
-                        <span>{layer}</span>
-                        <input
-                          type="text"
-                          value={architectureConfig.layerMatchers[layer].join(', ')}
-                          onChange={(event) => updateArchitectureMatchers(layer, event.target.value)}
-                          placeholder="e.g. /components/, /ui/"
-                        />
-                      </label>
-                    ))}
-                    <p className="hint">Allowed dependency directions:</p>
-                    <div className="architecture-matrix-wrap">
-                      <table className="architecture-matrix">
-                        <thead>
-                          <tr>
-                            <th>From \\ To</th>
-                            {ARCHITECTURE_RULE_LAYERS.map((layer) => (
-                              <th key={`head-${layer}`}>{layer}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {ARCHITECTURE_RULE_LAYERS.map((fromLayer) => (
-                            <tr key={`row-${fromLayer}`}>
-                              <th>{fromLayer}</th>
-                              {ARCHITECTURE_RULE_LAYERS.map((toLayer) => {
-                                const isAllowed = architectureConfig.allowedTargets[fromLayer].includes(toLayer)
-                                return (
-                                  <td key={`${fromLayer}->${toLayer}`}>
-                                    <input
-                                      type="checkbox"
-                                      checked={isAllowed}
-                                      onChange={(event) =>
-                                        updateArchitectureAllowedTarget(fromLayer, toLayer, event.target.checked)
-                                      }
-                                    />
-                                  </td>
-                                )
-                              })}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                ) : (
-                  <textarea
-                    value={architectureConfigDraft}
-                    onChange={(event) => setArchitectureConfigDraft(event.target.value)}
-                    spellCheck={false}
-                    rows={12}
-                  />
-                )}
-                <div className="architecture-config-actions">
-                  {architectureConfigMode === 'json' && (
-                    <button type="button" onClick={applyArchitectureConfigDraft}>
-                      Apply config
-                    </button>
-                  )}
-                  <button type="button" onClick={resetArchitectureConfig}>
-                    Reset default
-                  </button>
-                </div>
-                {architectureConfigError && <p className="error">{architectureConfigError}</p>}
-              </div>
-            </div>
-
-            <div className="section-card">
-              <h2>Export Architecture</h2>
-              <p>Save architecture rules and violations as JSON or Markdown.</p>
-              <div className="actions">
-                <button type="button" onClick={exportArchitectureReportJson} disabled={!scanResult || !dependencyGraph}>
-                  Export JSON
-                </button>
-                <button
-                  type="button"
-                  onClick={exportArchitectureReportMarkdown}
-                  disabled={!scanResult || !dependencyGraph}
-                >
-                  Export Markdown
-                </button>
-              </div>
-            </div>
-
-            {architectureViolations.length > 0 && (
-              <div className="section-card">
-                <h2>Violation Quick Actions</h2>
-                <ul className="quick-action-list">
-                  {architectureViolations.slice(0, 12).map((item) => (
-                    <li key={`arch-v-${item.kind}-${item.fromPath}-${item.toPath}`}>
-                      <code>
-                        [{item.kind}] {item.fromLayer}-&gt;{item.toLayer}: {item.fromPath}
-                      </code>
-                      <button
-                        type="button"
-                        className="quick-action-button"
-                        onClick={() => focusViolationOnBoard(item)}
-                      >
-                        Show on Board
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-          <div className="tree right-stack">
-            <div className="section-card">
-              <h2>Architecture Rules Snapshot</h2>
-              <pre className="report-pre">{architectureRuleLines.map((line) => `- ${line}`).join('\n')}</pre>
-            </div>
-            <div className="section-card">
-              <h2>Violations by Layer Pair</h2>
-              <pre className="report-pre">
-                {architectureViolationByPair.length > 0
-                  ? architectureViolationByPair.map(([pair, count]) => `- ${pair}: ${count}`).join('\n')
-                  : '- no violations'}
-              </pre>
-            </div>
-            <div className="section-card">
-              <h2>Violation Sample</h2>
-              <pre className="report-pre">
-                {architectureViolations.length > 0
-                  ? architectureViolations
-                      .slice(0, 40)
-                      .map(
-                        (item) =>
-                          `- [${item.kind}] ${item.fromLayer}->${item.toLayer} | ${item.fromPath} -> ${item.toPath}`,
-                      )
-                      .join('\n')
-                  : '- no violations'}
-              </pre>
-            </div>
-          </div>
-        </section>
+        <Architecture
+          architectureRuleLines={architectureRuleLines}
+          architectureViolations={architectureViolations}
+          architectureViolationByKind={architectureViolationByKind}
+          architectureLayerDistribution={architectureLayerDistribution}
+          architectureViolationByPair={architectureViolationByPair}
+          architectureConfig={architectureConfig}
+          architectureConfigMode={architectureConfigMode}
+          setArchitectureConfigMode={setArchitectureConfigMode}
+          architectureConfigDraft={architectureConfigDraft}
+          setArchitectureConfigDraft={setArchitectureConfigDraft}
+          architectureConfigError={architectureConfigError}
+          applyArchitectureConfigDraft={applyArchitectureConfigDraft}
+          resetArchitectureConfig={resetArchitectureConfig}
+          updateArchitectureMatchers={updateArchitectureMatchers}
+          updateArchitectureAllowedTarget={updateArchitectureAllowedTarget}
+          exportArchitectureReportJson={exportArchitectureReportJson}
+          exportArchitectureReportMarkdown={exportArchitectureReportMarkdown}
+          focusViolationOnBoard={focusViolationOnBoard}
+          scanResult={scanResult}
+          dependencyGraph={dependencyGraph}
+        />
       )}
 
       {activeTab === 'board' && (
-        <section className="panel grid board-grid">
-          <div className="stats board-sidebar">
-            <div className="flow-header">
-              <h2>Dependency Canvas</h2>
-              <div className="mode-switch">
-                <button
-                  type="button"
-                  className={graphMode === 'file-level' ? 'is-active' : ''}
-                  onClick={() => setGraphMode('file-level')}
-                >
-                  File-Level
-                </button>
-                <button
-                  type="button"
-                  className={graphMode === 'inter-block' ? 'is-active' : ''}
-                  onClick={() => setGraphMode('inter-block')}
-                >
-                  Inter-Block
-                </button>
-              </div>
-            </div>
-            <div className="flow-controls">
-              <label className="toggle-row">
-                <input
-                  type="checkbox"
-                  checked={showExternalImports}
-                  onChange={(event) => setShowExternalImports(event.target.checked)}
-                />
-                Show external imports
-              </label>
-              <label className="toggle-row">
-                <input
-                  type="checkbox"
-                  checked={simplifyHighlightedRoutes}
-                  onChange={(event) => setSimplifyHighlightedRoutes(event.target.checked)}
-                />
-                Simplify highlighted routes
-              </label>
-              <label className="toggle-row">
-                <input
-                  type="checkbox"
-                  checked={traceIntoCollapsedFolders}
-                  onChange={(event) => setTraceIntoCollapsedFolders(event.target.checked)}
-                />
-                Trace into collapsed folders
-              </label>
-              <label className="toggle-row">
-                <input
-                  type="checkbox"
-                  checked={highlightCycles}
-                  onChange={(event) => setHighlightCycles(event.target.checked)}
-                />
-                Highlight cycles
-              </label>
-              <label className="toggle-row">
-                <input
-                  type="checkbox"
-                  checked={highlightArchitectureViolations}
-                  onChange={(event) => setHighlightArchitectureViolations(event.target.checked)}
-                />
-                Highlight architecture violations
-              </label>
-              <label className="toggle-row">
-                <input
-                  type="checkbox"
-                  checked={showBaselineDiff}
-                  onChange={(event) => {
-                    const next = event.target.checked
-                    setShowBaselineDiff(next)
-                    if (!next) {
-                      setShowOnlyNewDiff(false)
-                    }
-                  }}
-                  disabled={!hasBaselineGraphSnapshot}
-                />
-                Show baseline diff
-              </label>
-              <label className="toggle-row">
-                <input
-                  type="checkbox"
-                  checked={showOnlyNewDiff}
-                  onChange={(event) => setShowOnlyNewDiff(event.target.checked)}
-                  disabled={!showBaselineDiff || !hasBaselineGraphSnapshot}
-                />
-                Show only new
-              </label>
-              <label className="toggle-row">
-                Branch diff
-                <select
-                  value={branchDiffView}
-                  onChange={(event) => {
-                    const next = event.target.value as BranchDiffView
-                    setBranchDiffView(next)
-                    if (next === 'off') {
-                      setHighlightOnlyChangedBranchEdges(false)
-                    }
-                  }}
-                  disabled={!gitBranchCompareReport}
-                >
-                  <option value="off">off</option>
-                  <option value="all">all changed</option>
-                  <option value="added">added</option>
-                  <option value="modified">modified</option>
-                  <option value="deleted">deleted</option>
-                  <option value="renamed">renamed</option>
-                </select>
-              </label>
-              <label className="toggle-row">
-                <input
-                  type="checkbox"
-                  checked={highlightOnlyChangedBranchEdges}
-                  onChange={(event) => setHighlightOnlyChangedBranchEdges(event.target.checked)}
-                  disabled={!gitBranchCompareReport || branchDiffView === 'off'}
-                />
-                Highlight only changed edges
-              </label>
-              <label className="toggle-row">
-                Direction
-                <select
-                  value={directionFilter}
-                  onChange={(event) => setDirectionFilter(event.target.value as 'all' | 'incoming' | 'outgoing')}
-                  disabled={!selectedNodeId}
-                >
-                  <option value="all">all</option>
-                  <option value="incoming">incoming</option>
-                  <option value="outgoing">outgoing</option>
-                </select>
-              </label>
-              <label className="toggle-row">
-                Edge type
-                <select value={edgeKindFilter} onChange={(event) => setEdgeKindFilter(event.target.value as EdgeKindFilter)}>
-                  <option value="all">all</option>
-                  <option value="runtime">runtime</option>
-                  <option value="type">type</option>
-                  <option value="re-export">re-export</option>
-                </select>
-              </label>
-              <label className="toggle-row">
-                Color priority
-                <select
-                  value={edgeColorPriority}
-                  onChange={(event) => setEdgeColorPriority(event.target.value as EdgeColorPriority)}
-                >
-                  <option value="direction">direction</option>
-                  <option value="kind">kind</option>
-                </select>
-              </label>
-              <label className="toggle-row">
-                Routing
-                <select
-                  value={routingStyle}
-                  onChange={(event) => setRoutingStyle(event.target.value as RoutingStyle)}
-                >
-                  <option value="classic">classic</option>
-                  <option value="bus">bus</option>
-                </select>
-              </label>
-              <label className="toggle-row">
-                Folder packing
-                <select
-                  value={folderPacking}
-                  onChange={(event) => setFolderPacking(event.target.value as FolderPackingMode)}
-                  disabled={graphMode !== 'file-level'}
-                >
-                  <option value="balanced">balanced</option>
-                  <option value="dense">dense</option>
-                </select>
-              </label>
-              <label className="toggle-row">
-                Auto depth
-                <input
-                  type="checkbox"
-                  checked={autoFolderDepth}
-                  onChange={(event) => {
-                    setAutoFolderDepth(event.target.checked)
-                    setFolderControlMode('preset')
-                  }}
-                  disabled={graphMode !== 'file-level' || !flowGraph}
-                />
-              </label>
-              <label className="toggle-row">
-                Depth
-                <select
-                  value={String(manualFolderDepth)}
-                  onChange={(event) => {
-                    const nextValue = event.target.value === 'any' ? 'any' : Number(event.target.value)
-                    setManualFolderDepth(nextValue)
-                    setAutoFolderDepth(false)
-                    setFolderControlMode('preset')
-                  }}
-                  disabled={graphMode !== 'file-level' || autoFolderDepth}
-                >
-                  <option value="any">any</option>
-                  <option value={1}>1</option>
-                  <option value={2}>2</option>
-                  <option value={3}>3</option>
-                  <option value={4}>4</option>
-                  <option value={5}>5</option>
-                  <option value={6}>6</option>
-                  <option value={7}>7</option>
-                  <option value={8}>8</option>
-                </select>
-              </label>
-              <label className="toggle-row search-row">
-                Search file
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="name or path"
-                />
-              </label>
-              <div className="board-action-grid">
-                <button
-                  type="button"
-                  className="board-icon-btn"
-                  title={selectedBlockId && collapsedBlockIds.has(selectedBlockId) ? 'Expand selected block' : 'Collapse selected block'}
-                  aria-label={selectedBlockId && collapsedBlockIds.has(selectedBlockId) ? 'Expand selected block' : 'Collapse selected block'}
-                  onClick={toggleSelectedBlockCollapse}
-                  disabled={graphMode !== 'file-level' || !selectedBlockId}
-                >
-                  {selectedBlockId && collapsedBlockIds.has(selectedBlockId) ? '⤢' : '⤡'}
-                </button>
-                <button
-                  type="button"
-                  className="board-icon-btn"
-                  title={areAllFoldersCollapsed ? 'Expand all folders' : 'Collapse all folders'}
-                  aria-label={areAllFoldersCollapsed ? 'Expand all folders' : 'Collapse all folders'}
-                  onClick={toggleAllFoldersCollapse}
-                  disabled={graphMode !== 'file-level' || collapsibleBlockIds.size === 0}
-                >
-                  {areAllFoldersCollapsed ? '⤢' : '⤡'}
-                </button>
-                <button
-                  type="button"
-                  className="board-icon-btn"
-                  title="Clear selection"
-                  aria-label="Clear selection"
-                  onClick={() => {
-                    setSelectedNodeId(null)
-                    setDirectionFilter('all')
-                  }}
-                  disabled={!selectedNodeId}
-                >
-                  ⨯
-                </button>
-              </div>
-            </div>
-            <div className="board-legend">
-              <span className="legend-item">
-                <span className="legend-swatch legend-swatch-neutral" />
-                Runtime edge
-              </span>
-              <span className="legend-item">
-                <span className="legend-swatch legend-swatch-type" />
-                Type edge
-              </span>
-              <span className="legend-item">
-                <span className="legend-swatch legend-swatch-reexport" />
-                Re-export edge
-              </span>
-              <span className="legend-item">
-                <span className="legend-swatch legend-swatch-violation" />
-                Architecture violation
-              </span>
-              <span className="legend-item">
-                <span className="legend-swatch legend-swatch-diff" />
-                New vs baseline
-              </span>
-              <span className="legend-item">
-                <span className="legend-swatch legend-swatch-branch-added" />
-                Branch: added
-              </span>
-              <span className="legend-item">
-                <span className="legend-swatch legend-swatch-branch-modified" />
-                Branch: modified
-              </span>
-              <span className="legend-item">
-                <span className="legend-swatch legend-swatch-branch-deleted" />
-                Branch: deleted
-              </span>
-              <span className="legend-item">
-                <span className="legend-swatch legend-swatch-branch-renamed" />
-                Branch: renamed
-              </span>
-              <span className="legend-item">
-                <span className="legend-swatch legend-swatch-import" />
-                Incoming (selected)
-              </span>
-              <span className="legend-item">
-                <span className="legend-swatch legend-swatch-export" />
-                Outgoing (selected)
-              </span>
-              <span className="legend-note">
-                `Color priority` controls whether selected edges keep kind colors or switch to direction colors.
-              </span>
-              {showBaselineDiff && (
-                <span className="legend-note">`Show only new` hides baseline nodes/edges and leaves only additions.</span>
-              )}
-              {!hasBaselineGraphSnapshot && (
-                <span className="legend-note">Load baseline JSON in Diagnostics to enable diff mode.</span>
-              )}
-              {!gitBranchCompareReport && (
-                <span className="legend-note">Load branch compare JSON in Diagnostics to enable branch overlay.</span>
-              )}
-              {gitBranchCompareReport && branchDiffView !== 'off' && highlightOnlyChangedBranchEdges && (
-                <span className="legend-note">`Highlight only changed edges` hides non-matching edges and keeps nodes unchanged.</span>
-              )}
-            </div>
-          </div>
-          <div className="board-main">
-            {flowGraph ? (
-              <>
-                <p className="canvas-meta">
-                  Blocks: {flowGraph.blockCount}, Nodes: {flowGraph.nodes.length}, Visible edges: {displayEdges.length}
-                  {' | '}Cycles: {flowGraph.cycleEdgeCount}
-                  {' | '}Matches: {matchingFileNodeIds.size}
-                  {gitBranchCompareReport && branchDiffView !== 'off'
-                    ? ` | Branch matches: ${branchDiffVisibleFileNodeIds.size}`
-                    : ''}
-                  {isLayouting ? ' | Layout: running...' : ' | Layout: ELK ready'}
-                </p>
-                <div className="canvas-shell" ref={canvasShellRef}>
-                  <button
-                    type="button"
-                    className="canvas-fullscreen-btn"
-                    onClick={toggleCanvasFullscreen}
-                    title={isCanvasFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-                  >
-                    {isCanvasFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-                  </button>
-                  <ReactFlow
-                    key={`rf-${graphMode}-${routingStyle}-${folderPacking}-${
-                      routingStyle === 'classic'
-                        ? `${selectedNodeId ?? 'none'}-${directionFilter}-${edgeKindFilter}-${edgeColorPriority}`
-                        : `stable-${edgeKindFilter}-${edgeColorPriority}`
-                    }-${highlightArchitectureViolations ? 'arch-on' : 'arch-off'}-${
-                      showBaselineDiff ? 'diff-on' : 'diff-off'
-                    }-${showOnlyNewDiff ? 'only-new' : 'all-diff'}-${
-                      hasBaselineGraphSnapshot ? 'baseline-ready' : 'baseline-missing'
-                    }-${
-                      architectureViolations.length
-                    }`}
-                    nodes={renderedNodes}
-                    edges={displayEdges}
-                    nodeTypes={nodeTypes}
-                    edgeTypes={edgeTypes}
-                    onNodeClick={onNodeClick}
-                    onPaneClick={() => {
-                      setSelectedNodeId(null)
-                      setDirectionFilter('all')
-                    }}
-                    onNodeMouseEnter={onNodeMouseEnter}
-                    onNodeMouseLeave={onNodeMouseLeave}
-                    defaultViewport={savedViewport ?? { x: 0, y: 0, zoom: 1 }}
-                    fitView={!savedViewport}
-                    minZoom={0.1}
-                    maxZoom={1.5}
-                    panOnDrag={!isCanvasLocked}
-                    panOnScroll={!isCanvasLocked}
-                    zoomOnScroll={!isCanvasLocked}
-                    zoomOnPinch={!isCanvasLocked}
-                    zoomOnDoubleClick={!isCanvasLocked}
-                    nodesDraggable={!isCanvasLocked}
-                    elementsSelectable={!isCanvasLocked}
-                    onInit={(instance) => {
-                      setSavedViewport(instance.getViewport())
-                    }}
-                    onMoveEnd={(_event, viewport) => {
-                      setSavedViewport(viewport)
-                    }}
-                  >
-                    <MiniMap
-                      position="bottom-right"
-                      pannable
-                      zoomable
-                      nodeColor="#335f82"
-                      bgColor="rgba(4, 16, 29, 0.92)"
-                      maskColor="rgba(2, 9, 16, 0.72)"
-                    />
-                    <CanvasNavWheel
-                      isLocked={isCanvasLocked}
-                      onToggleLock={() => setIsCanvasLocked((previous) => !previous)}
-                    />
-                    <Background gap={24} size={1} color="#3a6689" />
-                  </ReactFlow>
-                </div>
-                <p className="canvas-selected-strip" title={selectedInfoLine}>
-                  Selected: <span className="canvas-selected-value">{selectedInfoLine}</span>
-                </p>
-                <p className="canvas-hover-strip" title={hoverInfoLine}>
-                  Hover: <span className="canvas-hover-value">{hoverInfoLine}</span>
-                </p>
-                <div className="canvas-selected-io">
-                  {selectedFilePath ? (
-                    <>
-                      <div className="canvas-selected-io-col">
-                        <h4 title="Files this file imports">
-                          Imports ({selectedImportedFiles.length})
-                        </h4>
-                        {selectedImportedFiles.length > 0 ? (
-                          <ul>
-                            {selectedImportedFiles.map((path) => (
-                              <li
-                                key={`imp-${path}`}
-                                title={path}
-                                onClick={() => setSelectedNodeId(`file:${path}`)}
-                              >
-                                {path}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="canvas-selected-io-empty">none</p>
-                        )}
-                      </div>
-                      <div className="canvas-selected-io-col">
-                        <h4 title="Files that import this file">
-                          Used by ({selectedImportedByFiles.length})
-                        </h4>
-                        {selectedImportedByFiles.length > 0 ? (
-                          <ul>
-                            {selectedImportedByFiles.map((path) => (
-                              <li
-                                key={`impby-${path}`}
-                                title={path}
-                                onClick={() => setSelectedNodeId(`file:${path}`)}
-                              >
-                                {path}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="canvas-selected-io-empty">none</p>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <p className="canvas-selected-io-empty">
-                      {selectedNodeId
-                        ? 'Select a file node to see incoming and outgoing imports.'
-                        : 'No file selected.'}
-                    </p>
-                  )}
-                </div>
-              </>
-            ) : (
-              <p className="canvas-meta">Scan a folder to build and render dependency canvas.</p>
-            )}
-          </div>
-        </section>
+        <Board
+          graphMode={graphMode}
+          setGraphMode={setGraphMode}
+          showExternalImports={showExternalImports}
+          setShowExternalImports={setShowExternalImports}
+          simplifyHighlightedRoutes={simplifyHighlightedRoutes}
+          setSimplifyHighlightedRoutes={setSimplifyHighlightedRoutes}
+          traceIntoCollapsedFolders={traceIntoCollapsedFolders}
+          setTraceIntoCollapsedFolders={setTraceIntoCollapsedFolders}
+          highlightCycles={highlightCycles}
+          setHighlightCycles={setHighlightCycles}
+          highlightArchitectureViolations={highlightArchitectureViolations}
+          setHighlightArchitectureViolations={setHighlightArchitectureViolations}
+          showBaselineDiff={showBaselineDiff}
+          setShowBaselineDiff={setShowBaselineDiff}
+          showOnlyNewDiff={showOnlyNewDiff}
+          setShowOnlyNewDiff={setShowOnlyNewDiff}
+          hasBaselineGraphSnapshot={hasBaselineGraphSnapshot}
+          branchDiffView={branchDiffView}
+          setBranchDiffView={setBranchDiffView}
+          highlightOnlyChangedBranchEdges={highlightOnlyChangedBranchEdges}
+          setHighlightOnlyChangedBranchEdges={setHighlightOnlyChangedBranchEdges}
+          gitBranchCompareReport={gitBranchCompareReport}
+          branchDiffVisibleFileNodeIds={branchDiffVisibleFileNodeIds}
+          selectedNodeId={selectedNodeId}
+          setSelectedNodeId={setSelectedNodeId}
+          directionFilter={directionFilter}
+          setDirectionFilter={setDirectionFilter}
+          edgeKindFilter={edgeKindFilter}
+          setEdgeKindFilter={setEdgeKindFilter}
+          edgeColorPriority={edgeColorPriority}
+          setEdgeColorPriority={setEdgeColorPriority}
+          routingStyle={routingStyle}
+          setRoutingStyle={setRoutingStyle}
+          folderPacking={folderPacking}
+          setFolderPacking={setFolderPacking}
+          autoFolderDepth={autoFolderDepth}
+          setAutoFolderDepth={setAutoFolderDepth}
+          setFolderControlMode={setFolderControlMode}
+          manualFolderDepth={manualFolderDepth}
+          setManualFolderDepth={setManualFolderDepth}
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          selectedBlockId={selectedBlockId}
+          collapsedBlockIds={collapsedBlockIds}
+          collapsibleBlockIds={collapsibleBlockIds}
+          areAllFoldersCollapsed={areAllFoldersCollapsed}
+          toggleSelectedBlockCollapse={toggleSelectedBlockCollapse}
+          toggleAllFoldersCollapse={toggleAllFoldersCollapse}
+          flowGraph={flowGraph}
+          displayEdges={displayEdges}
+          renderedNodes={renderedNodes}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          matchingFileNodeIds={matchingFileNodeIds}
+          isLayouting={isLayouting}
+          architectureViolations={architectureViolations}
+          canvasShellRef={canvasShellRef}
+          toggleCanvasFullscreen={toggleCanvasFullscreen}
+          isCanvasFullscreen={isCanvasFullscreen}
+          onNodeClick={onNodeClick}
+          onNodeMouseEnter={onNodeMouseEnter}
+          onNodeMouseLeave={onNodeMouseLeave}
+          isCanvasLocked={isCanvasLocked}
+          setIsCanvasLocked={setIsCanvasLocked}
+          savedViewport={savedViewport}
+          setSavedViewport={setSavedViewport}
+          selectedInfoLine={selectedInfoLine}
+          hoverInfoLine={hoverInfoLine}
+          selectedFilePath={selectedFilePath}
+          selectedImportedFiles={selectedImportedFiles}
+          selectedImportedByFiles={selectedImportedByFiles}
+        />
       )}
     </main>
   )
