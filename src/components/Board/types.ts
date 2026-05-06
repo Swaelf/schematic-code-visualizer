@@ -1,4 +1,5 @@
-import type { Edge, EdgeTypes, Node, NodeMouseHandler, NodeTypes } from '@xyflow/react'
+import type { Edge, Node, NodeMouseHandler } from '@xyflow/react'
+import type { Dispatch, SetStateAction } from 'react'
 import type { BuiltGraph, FolderPackingMode, GraphBuildMode, RoutingStyle } from '../../lib/graph-builder'
 import type {
   ArchitectureViolation,
@@ -62,22 +63,17 @@ export type BoardProps = {
   manualFolderDepth: ManualFolderDepth
   setManualFolderDepth: (value: ManualFolderDepth) => void
 
-  // Search & collapse
+  // Search & collapse (collapse helpers + memos are computed locally inside Board).
   searchQuery: string
   setSearchQuery: (value: string) => void
-  selectedBlockId: string | null
   collapsedBlockIds: Set<string>
-  collapsibleBlockIds: Set<string>
-  areAllFoldersCollapsed: boolean
-  toggleSelectedBlockCollapse: () => void
-  toggleAllFoldersCollapse: () => void
+  setCollapsedBlockIds: Dispatch<SetStateAction<Set<string>>>
+  fileNodeToBlockId: Map<string, string>
 
   // Canvas core
   flowGraph: BuiltGraph | null
   displayEdges: Edge[]
   renderedNodes: Node[]
-  nodeTypes: NodeTypes
-  edgeTypes: EdgeTypes
   matchingFileNodeIds: Set<string>
   isLayouting: boolean
   architectureViolations: ArchitectureViolation[]

@@ -1,6 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Background, MiniMap, ReactFlow, type Viewport } from '@xyflow/react'
+import { getFolderDepth } from '../../utils/get-folder-depth'
+import { BusEdge } from '../BusEdge'
 import { CanvasNavWheel } from '../CanvasNavWheel'
+import { ChipFileNode } from '../ChipFileNode'
+import { ClassicEdge } from '../ClassicEdge'
+import { FolderBlockNode } from '../FolderBlockNode'
 import type { BoardProps } from './types'
 
 export function Board({
@@ -46,17 +51,12 @@ export function Board({
   setManualFolderDepth,
   searchQuery,
   setSearchQuery,
-  selectedBlockId,
   collapsedBlockIds,
-  collapsibleBlockIds,
-  areAllFoldersCollapsed,
-  toggleSelectedBlockCollapse,
-  toggleAllFoldersCollapse,
+  setCollapsedBlockIds,
+  fileNodeToBlockId,
   flowGraph,
   displayEdges,
   renderedNodes,
-  nodeTypes,
-  edgeTypes,
   matchingFileNodeIds,
   isLayouting,
   architectureViolations,
@@ -73,6 +73,51 @@ export function Board({
   const [isCanvasFullscreen, setIsCanvasFullscreen] = useState(false)
   const [isCanvasLocked, setIsCanvasLocked] = useState(false)
   const [savedViewport, setSavedViewport] = useState<Viewport | null>(null)
+  const nodeTypes = useMemo(() => ({ chipFile: ChipFileNode, folderBlock: FolderBlockNode }), [])
+  const edgeTypes = useMemo(() => ({ bus: BusEdge, classicLine: ClassicEdge }), [])
+
+  const selectedBlockId = useMemo(() => {
+    if (!selectedNodeId) return null
+    if (selectedNodeId.startsWith('block:')) return selectedNodeId
+    return fileNodeToBlockId.get(selectedNodeId) ?? null
+  }, [selectedNodeId, fileNodeToBlockId])
+
+  const collapsibleBlockIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const node of flowGraph?.nodes ?? []) {
+      if (!node.id.startsWith('block:')) continue
+      if (getFolderDepth(node.id) > 0) ids.add(node.id)
+    }
+    return ids
+  }, [flowGraph])
+
+  const areAllFoldersCollapsed = useMemo(() => {
+    if (collapsibleBlockIds.size === 0) return false
+    for (const blockId of collapsibleBlockIds) {
+      if (!collapsedBlockIds.has(blockId)) return false
+    }
+    return true
+  }, [collapsibleBlockIds, collapsedBlockIds])
+
+  function toggleSelectedBlockCollapse() {
+    if (!selectedBlockId || graphMode !== 'file-level') return
+    setAutoFolderDepth(false)
+    setFolderControlMode('manual')
+    setCollapsedBlockIds((previous) => {
+      const next = new Set(previous)
+      if (next.has(selectedBlockId)) next.delete(selectedBlockId)
+      else next.add(selectedBlockId)
+      return next
+    })
+  }
+
+  function toggleAllFoldersCollapse() {
+    if (graphMode !== 'file-level' || collapsibleBlockIds.size === 0) return
+    setAutoFolderDepth(false)
+    setFolderControlMode('manual')
+    if (areAllFoldersCollapsed) setCollapsedBlockIds(new Set())
+    else setCollapsedBlockIds(new Set(collapsibleBlockIds))
+  }
 
   useEffect(() => {
     const handleFullscreenChange = () => {

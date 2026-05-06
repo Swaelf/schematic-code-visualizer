@@ -3,15 +3,10 @@ import type { Edge, NodeMouseHandler } from '@xyflow/react'
 import { About } from './components/About'
 import { Architecture } from './components/Architecture'
 import { Board } from './components/Board'
-import { BusEdge } from './components/BusEdge'
-import { ChipFileNode } from './components/ChipFileNode'
-import { ClassicEdge } from './components/ClassicEdge'
 import { Dependencies } from './components/Dependencies'
 import { Diagnostics } from './components/Diagnostics'
-import { FolderBlockNode } from './components/FolderBlockNode'
 import { Overview } from './components/Overview'
 import { TabNav } from './components/TabNav'
-import { analyzeProjectDependenciesInWorker } from './lib/analyzer-worker-client'
 import { computeBusRoutes } from './lib/bus-router'
 import { routeDirectOrthogonal } from './lib/direct-router'
 import { applyElkToBlockNodes } from './lib/elk-layout'
@@ -22,9 +17,6 @@ import {
   type RoutingStyle,
 } from './lib/graph-builder'
 import type { DependencyEdge, DependencyGraph, FileAnalysis, ScannedProject } from './lib/models'
-import { scanProjectFolder } from './lib/scanner'
-import { readTsConfigAliasConfig } from './lib/tsconfig-reader'
-import { buildTreeLines } from './lib/tree-view'
 import './App.css'
 import '@xyflow/react/dist/style.css'
 
@@ -32,7 +24,6 @@ import type {
   AnalysisExportReport,
   AppTab,
   ArchitectureConfig,
-  ArchitectureExportReport,
   ArchitectureLayerId,
   ArchitectureViolation,
   BranchDiffView,
@@ -50,13 +41,11 @@ import {
   DEFAULT_ARCHITECTURE_CONFIG,
 } from './constants'
 
-import { buildArchitectureMarkdownReport } from './utils/build-architecture-markdown-report'
-import { buildMarkdownReport } from './utils/build-markdown-report'
 import { detectArchitectureLayer } from './utils/detect-architecture-layer'
-import { downloadTextFile } from './utils/download-text-file'
 import { findTopCycleGroups } from './utils/find-top-cycle-groups'
 import { getTopLevelBlockLabelForPath } from './utils/get-top-level-block-label-for-path'
 import { hashText } from './utils/hash-text'
+import { getFolderDepth } from './utils/get-folder-depth'
 import { isArchitectureEdgeAllowed } from './utils/is-architecture-edge-allowed'
 import { mergeBranchDiffBuckets } from './utils/merge-branch-diff-buckets'
 import { normalizeArchitectureConfig } from './utils/normalize-architecture-config'
@@ -93,13 +82,9 @@ function App() {
   const [hoveredFilePath, setHoveredFilePath] = useState<string | null>(null)
   const [layoutedNodes, setLayoutedNodes] = useState<ReturnType<typeof buildDependencyFlowGraph>['nodes']>([])
   const [isLayouting, setIsLayouting] = useState(false)
-  const [isScanning, setIsScanning] = useState(false)
-  const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [baselineReport, setBaselineReport] = useState<AnalysisExportReport | null>(null)
   const [gitChurnReport, setGitChurnReport] = useState<GitChurnReport | null>(null)
   const [gitBranchCompareReport, setGitBranchCompareReport] = useState<GitBranchCompareReport | null>(null)
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const treeLines = useMemo(() => buildTreeLines(scanResult?.tree ?? null), [scanResult])
   const fileLocByPath = useMemo(() => {
     const map = new Map<string, number>()
     for (const file of scanResult?.files ?? []) {
@@ -108,25 +93,7 @@ function App() {
     }
     return map
   }, [scanResult])
-  const nodeTypes = useMemo(() => ({ chipFile: ChipFileNode, folderBlock: FolderBlockNode }), [])
-  const edgeTypes = useMemo(() => ({ bus: BusEdge, classicLine: ClassicEdge }), [])
 
-  const isPickerAvailable = typeof window !== 'undefined' && 'showDirectoryPicker' in window
-
-  const topConnectedFiles = useMemo(() => {
-    if (!dependencyGraph) {
-      return []
-    }
-    return [...dependencyGraph.files]
-      .sort(
-        (left, right) =>
-          right.resolvedImports.length - left.resolvedImports.length ||
-          left.path.localeCompare(right.path),
-      )
-      .slice(0, 8)
-  }, [dependencyGraph])
-
-  const previewEdges = useMemo(() => dependencyGraph?.edges.slice(0, 20) ?? [], [dependencyGraph])
   const fileAnalysisByPath = useMemo(() => {
     const map = new Map<string, FileAnalysis>()
     for (const file of dependencyGraph?.files ?? []) {
@@ -780,149 +747,6 @@ function App() {
     }
     return ids
   }, [architectureViolations, scanResult?.rootName])
-  const analysisReport = useMemo<AnalysisExportReport>(() => {
-    const now = new Date().toISOString()
-    return {
-      generatedAt: now,
-      projectRoot: scanResult?.rootName ?? null,
-      summary: {
-        tsFiles: scanResult?.tsFileCount ?? 0,
-        directories: scanResult?.directoryCount ?? 0,
-        dependencyEdges: dependencyGraph?.edges.length ?? 0,
-        cycleEdges: topCycleGroups.length,
-        unresolvedImports: dependencyGraph?.unresolvedImportCount ?? 0,
-        unresolvedInternal: dependencyGraph?.unresolvedInternalCount ?? 0,
-        unresolvedExternal: dependencyGraph?.unresolvedExternalCount ?? 0,
-        aliasResolved: dependencyGraph?.aliasResolvedCount ?? 0,
-      },
-      edgeKinds: dependencyEdgeKindCounts,
-      codeHealth: {
-        hotspots: hotspotFiles.map((item) => ({
-          path: item.path,
-          score: item.score,
-          incoming: item.incoming,
-          outgoing: item.outgoing,
-          loc: item.loc,
-        })),
-        deadExports: potentiallyDeadExportFiles.map((file) => ({
-          path: file.path,
-          exportCount: file.exports.length,
-          exports: file.exports,
-        })),
-        cycleGroups: topCycleGroups.map((group) => ({
-          id: group.id,
-          size: group.size,
-          files: group.filePaths,
-        })),
-      },
-      risk: {
-        files: riskByFile,
-        blocks: riskByBlock,
-      },
-      refactorSignals: {
-        orphanRuntimeModules,
-        reexportHubs: reexportHubFiles,
-        duplicateUtilityGroups,
-        reexportBottlenecks: reexportBottleneckFiles,
-        reexportChains,
-      },
-      architecture: {
-        rules: architectureRuleLines,
-        layerDistribution: architectureLayerDistribution,
-        violationsByKind: architectureViolationByKind,
-        violationsByLayerPair: architectureViolationByPair.map(([pair, count]) => ({ pair, count })),
-        violations: architectureViolations.map((item) => ({
-          kind: item.kind,
-          fromLayer: item.fromLayer,
-          toLayer: item.toLayer,
-          fromPath: item.fromPath,
-          toPath: item.toPath,
-        })),
-      },
-      graphSnapshot: {
-        files: dependencyGraph?.files.map((file) => file.path) ?? [],
-        edges:
-          dependencyGraph?.edges.map((edge) => ({
-            fromPath: edge.fromPath,
-            toPath: edge.toPath,
-            kind: edge.kind,
-          })) ?? [],
-      },
-    }
-  }, [
-    architectureLayerDistribution,
-    architectureRuleLines,
-    architectureViolationByKind,
-    architectureViolationByPair,
-    architectureViolations,
-    dependencyEdgeKindCounts,
-    dependencyGraph,
-    hotspotFiles,
-    orphanRuntimeModules,
-    potentiallyDeadExportFiles,
-    duplicateUtilityGroups,
-    reexportBottleneckFiles,
-    reexportChains,
-    reexportHubFiles,
-    riskByBlock,
-    riskByFile,
-    scanResult?.directoryCount,
-    scanResult?.rootName,
-    scanResult?.tsFileCount,
-    topCycleGroups,
-  ])
-  const architectureReport = useMemo<ArchitectureExportReport>(
-    () => ({
-      generatedAt: new Date().toISOString(),
-      projectRoot: scanResult?.rootName ?? null,
-      rules: architectureRuleLines,
-      layerDistribution: architectureLayerDistribution,
-      violationsByKind: architectureViolationByKind,
-      violationsByLayerPair: architectureViolationByPair.map(([pair, count]) => ({ pair, count })),
-      violations: architectureViolations.map((item) => ({
-        kind: item.kind,
-        fromLayer: item.fromLayer,
-        toLayer: item.toLayer,
-        fromPath: item.fromPath,
-        toPath: item.toPath,
-      })),
-    }),
-    [
-      architectureLayerDistribution,
-      architectureRuleLines,
-      architectureViolationByKind,
-      architectureViolationByPair,
-      architectureViolations,
-      scanResult?.rootName,
-    ],
-  )
-  const baselineDelta = useMemo(() => {
-    if (!baselineReport) {
-      return null
-    }
-    return {
-      tsFiles: analysisReport.summary.tsFiles - baselineReport.summary.tsFiles,
-      directories: analysisReport.summary.directories - baselineReport.summary.directories,
-      dependencyEdges: analysisReport.summary.dependencyEdges - baselineReport.summary.dependencyEdges,
-      cycleEdges: analysisReport.summary.cycleEdges - baselineReport.summary.cycleEdges,
-      unresolvedImports: analysisReport.summary.unresolvedImports - baselineReport.summary.unresolvedImports,
-      unresolvedInternal: analysisReport.summary.unresolvedInternal - baselineReport.summary.unresolvedInternal,
-      unresolvedExternal: analysisReport.summary.unresolvedExternal - baselineReport.summary.unresolvedExternal,
-      aliasResolved: analysisReport.summary.aliasResolved - baselineReport.summary.aliasResolved,
-      edgeKinds: {
-        runtime: analysisReport.edgeKinds.runtime - baselineReport.edgeKinds.runtime,
-        type: analysisReport.edgeKinds.type - baselineReport.edgeKinds.type,
-        're-export': analysisReport.edgeKinds['re-export'] - baselineReport.edgeKinds['re-export'],
-      },
-      architectureViolations:
-        analysisReport.architecture.violations.length - baselineReport.architecture.violations.length,
-      orphanRuntimeModules:
-        analysisReport.refactorSignals.orphanRuntimeModules.length -
-        (baselineReport.refactorSignals?.orphanRuntimeModules?.length ?? 0),
-      reexportHubs:
-        analysisReport.refactorSignals.reexportHubs.length - (baselineReport.refactorSignals?.reexportHubs?.length ?? 0),
-    }
-  }, [analysisReport, baselineReport])
   const hasBaselineGraphSnapshot = useMemo(
     () =>
       !!baselineReport &&
@@ -1820,64 +1644,6 @@ function App() {
     }
   }, [])
 
-  async function readProjectReadme(directoryHandle: FileSystemDirectoryHandle) {
-    const candidateNames = ['README.md', 'Readme.md', 'readme.md', 'README.MD']
-    for (const name of candidateNames) {
-      try {
-        const fileHandle = await directoryHandle.getFileHandle(name)
-        const file = await fileHandle.getFile()
-        return {
-          name,
-          content: await file.text(),
-        }
-      } catch {
-        // Continue search
-      }
-    }
-    return {
-      name: null,
-      content: null,
-    }
-  }
-
-  async function handlePickDirectory() {
-    if (!isPickerAvailable) {
-      setErrorMessage('Your browser does not support File System Access API (use Chromium-based browser).')
-      return
-    }
-
-    setIsScanning(true)
-    setIsAnalyzing(false)
-    setErrorMessage(null)
-
-    try {
-      const directoryHandle = await window.showDirectoryPicker({
-        mode: 'read',
-      })
-      const readme = await readProjectReadme(directoryHandle)
-      setProjectReadmeName(readme.name)
-      setProjectReadmeContent(readme.content)
-      const scannedProject = await scanProjectFolder(directoryHandle)
-      const tsconfigAliases = await readTsConfigAliasConfig(directoryHandle)
-      setScanResult(scannedProject)
-      setIsAnalyzing(true)
-      const graph = await analyzeProjectDependenciesInWorker(scannedProject.files, {
-        rootName: scannedProject.rootName,
-        tsconfigAliases,
-      })
-      setDependencyGraph(graph)
-    } catch (error) {
-      if ((error as DOMException).name === 'AbortError') {
-        return
-      }
-      setErrorMessage('Failed to scan or analyze the selected directory.')
-      console.error(error)
-    } finally {
-      setIsScanning(false)
-      setIsAnalyzing(false)
-    }
-  }
-
   const onNodeClick: NodeMouseHandler = (_event, node) => {
     if (graphMode === 'inter-block' && node.parentId) {
       setSelectedNodeId(node.parentId)
@@ -1897,28 +1663,6 @@ function App() {
   const onNodeMouseLeave: NodeMouseHandler = () => {
     setHoveredFilePath(null)
   }
-
-  const isBusy = isScanning || isAnalyzing
-
-  function pickButtonLabel() {
-    if (isScanning) {
-      return 'Scanning files...'
-    }
-    if (isAnalyzing) {
-      return 'Analyzing dependencies...'
-    }
-    return 'Select Project Folder'
-  }
-
-  const selectedBlockId = useMemo(() => {
-    if (!selectedNodeId) {
-      return null
-    }
-    if (selectedNodeId.startsWith('block:')) {
-      return selectedNodeId
-    }
-    return fileNodeToBlockId.get(selectedNodeId) ?? null
-  }, [selectedNodeId, fileNodeToBlockId])
 
   const hoveredFileAnalysis = hoveredFilePath ? fileAnalysisByPath.get(hoveredFilePath) ?? null : null
   const hoverInfoLine = hoveredFileAnalysis
@@ -1958,34 +1702,6 @@ function App() {
     }
     return Array.from(set).sort()
   }, [selectedFilePath, dependencyGraph, showExternalImports])
-
-  function toggleSelectedBlockCollapse() {
-    if (!selectedBlockId || graphMode !== 'file-level') {
-      return
-    }
-    setAutoFolderDepth(false)
-    setFolderControlMode('manual')
-    setCollapsedBlockIds((previous) => {
-      const next = new Set(previous)
-      if (next.has(selectedBlockId)) {
-        next.delete(selectedBlockId)
-      } else {
-        next.add(selectedBlockId)
-      }
-      return next
-    })
-  }
-
-  function getFolderDepth(blockId: string) {
-    if (!blockId.startsWith('block:')) {
-      return 0
-    }
-    const relative = blockId.slice('block:'.length)
-    if (!relative || relative === '(root)') {
-      return 0
-    }
-    return relative.split('/').length
-  }
 
   function applyFolderDepthPreset(maxDepth: ManualFolderDepth) {
     if (!flowGraph || graphMode !== 'file-level') {
@@ -2071,44 +1787,6 @@ function App() {
   }
 
 
-  const collapsibleBlockIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const node of flowGraph?.nodes ?? []) {
-      if (!node.id.startsWith('block:')) {
-        continue
-      }
-      if (getFolderDepth(node.id) > 0) {
-        ids.add(node.id)
-      }
-    }
-    return ids
-  }, [flowGraph])
-
-  const areAllFoldersCollapsed = useMemo(() => {
-    if (collapsibleBlockIds.size === 0) {
-      return false
-    }
-    for (const blockId of collapsibleBlockIds) {
-      if (!collapsedBlockIds.has(blockId)) {
-        return false
-      }
-    }
-    return true
-  }, [collapsibleBlockIds, collapsedBlockIds])
-
-  function toggleAllFoldersCollapse() {
-    if (graphMode !== 'file-level' || collapsibleBlockIds.size === 0) {
-      return
-    }
-    setAutoFolderDepth(false)
-    setFolderControlMode('manual')
-    if (areAllFoldersCollapsed) {
-      setCollapsedBlockIds(new Set())
-    } else {
-      setCollapsedBlockIds(new Set(collapsibleBlockIds))
-    }
-  }
-
   function focusFileOnBoard(filePath: string) {
     setGraphMode('file-level')
     setSelectedNodeId(`file:${filePath}`)
@@ -2123,31 +1801,6 @@ function App() {
     setEdgeKindFilter(violation.kind)
     setActiveTab('board')
   }
-
-  function exportAnalysisReportJson() {
-    const projectName = scanResult?.rootName ?? 'project'
-    const fileName = `analysis-report-${projectName}.json`
-    downloadTextFile(fileName, JSON.stringify(analysisReport, null, 2), 'application/json;charset=utf-8')
-  }
-
-  function exportAnalysisReportMarkdown() {
-    const projectName = scanResult?.rootName ?? 'project'
-    const fileName = `analysis-report-${projectName}.md`
-    downloadTextFile(fileName, buildMarkdownReport(analysisReport), 'text/markdown;charset=utf-8')
-  }
-
-  function exportArchitectureReportJson() {
-    const projectName = scanResult?.rootName ?? 'project'
-    const fileName = `architecture-report-${projectName}.json`
-    downloadTextFile(fileName, JSON.stringify(architectureReport, null, 2), 'application/json;charset=utf-8')
-  }
-
-  function exportArchitectureReportMarkdown() {
-    const projectName = scanResult?.rootName ?? 'project'
-    const fileName = `architecture-report-${projectName}.md`
-    downloadTextFile(fileName, buildArchitectureMarkdownReport(architectureReport), 'text/markdown;charset=utf-8')
-  }
-
 
   useEffect(() => {
     if (!flowGraph || graphMode !== 'file-level') {
@@ -2170,15 +1823,13 @@ function App() {
       {activeTab === 'overview' && (
         <Overview
           scanResult={scanResult}
+          setScanResult={setScanResult}
           dependencyGraph={dependencyGraph}
+          setDependencyGraph={setDependencyGraph}
           flowGraph={flowGraph}
           matchingFileNodeIds={matchingFileNodeIds}
-          isBusy={isBusy}
-          errorMessage={errorMessage}
-          pickButtonLabel={pickButtonLabel}
-          handlePickDirectory={handlePickDirectory}
-          fileLocByPath={fileLocByPath}
-          treeLines={treeLines}
+          setProjectReadmeName={setProjectReadmeName}
+          setProjectReadmeContent={setProjectReadmeContent}
         />
       )}
 
@@ -2190,20 +1841,15 @@ function App() {
         />
       )}
 
-      {activeTab === 'dependencies' && (
-        <Dependencies topConnectedFiles={topConnectedFiles} previewEdges={previewEdges} />
-      )}
+      {activeTab === 'dependencies' && <Dependencies dependencyGraph={dependencyGraph} />}
 
       {activeTab === 'diagnostics' && (
         <Diagnostics
           dependencyGraph={dependencyGraph}
           isLayouting={isLayouting}
           scanResult={scanResult}
-          exportAnalysisReportJson={exportAnalysisReportJson}
-          exportAnalysisReportMarkdown={exportAnalysisReportMarkdown}
           baselineReport={baselineReport}
           setBaselineReport={setBaselineReport}
-          baselineDelta={baselineDelta}
           gitChurnReport={gitChurnReport}
           setGitChurnReport={setGitChurnReport}
           churnHotFiles={churnHotFiles}
@@ -2246,8 +1892,6 @@ function App() {
           architectureViolationByPair={architectureViolationByPair}
           architectureConfig={architectureConfig}
           setArchitectureConfig={setArchitectureConfig}
-          exportArchitectureReportJson={exportArchitectureReportJson}
-          exportArchitectureReportMarkdown={exportArchitectureReportMarkdown}
           focusViolationOnBoard={focusViolationOnBoard}
           scanResult={scanResult}
           dependencyGraph={dependencyGraph}
@@ -2298,17 +1942,12 @@ function App() {
           setManualFolderDepth={setManualFolderDepth}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
-          selectedBlockId={selectedBlockId}
           collapsedBlockIds={collapsedBlockIds}
-          collapsibleBlockIds={collapsibleBlockIds}
-          areAllFoldersCollapsed={areAllFoldersCollapsed}
-          toggleSelectedBlockCollapse={toggleSelectedBlockCollapse}
-          toggleAllFoldersCollapse={toggleAllFoldersCollapse}
+          setCollapsedBlockIds={setCollapsedBlockIds}
+          fileNodeToBlockId={fileNodeToBlockId}
           flowGraph={flowGraph}
           displayEdges={displayEdges}
           renderedNodes={renderedNodes}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
           matchingFileNodeIds={matchingFileNodeIds}
           isLayouting={isLayouting}
           architectureViolations={architectureViolations}

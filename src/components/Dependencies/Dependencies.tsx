@@ -1,11 +1,22 @@
-import type { DependencyEdge, FileAnalysis } from '../../lib/models'
+import { useMemo } from 'react'
+import type { DependencyGraph } from '../../lib/models'
 
 type DependenciesProps = {
-  topConnectedFiles: FileAnalysis[]
-  previewEdges: DependencyEdge[]
+  dependencyGraph: DependencyGraph | null
 }
 
-export function Dependencies({ topConnectedFiles, previewEdges }: DependenciesProps) {
+export function Dependencies({ dependencyGraph }: DependenciesProps) {
+  const topConnectedFiles = useMemo(() => {
+    if (!dependencyGraph) return []
+    return [...dependencyGraph.files]
+      .sort(
+        (left, right) =>
+          right.resolvedImports.length - left.resolvedImports.length || left.path.localeCompare(right.path),
+      )
+      .slice(0, 8)
+  }, [dependencyGraph])
+  const previewEdges = useMemo(() => dependencyGraph?.edges.slice(0, 20) ?? [], [dependencyGraph])
+
   return (
     <section className="panel grid dependencies-grid">
       <div className="stats">

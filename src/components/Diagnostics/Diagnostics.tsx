@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from 'react'
+import { useMemo, useState, type ChangeEvent } from 'react'
 import type {
   AnalysisExportReport,
   GitBranchCompareReport,
@@ -7,6 +7,8 @@ import type {
   GitLiveRefsResponse,
 } from '../../types'
 import { architectureConfigDescription } from '../../utils/architecture-config-description'
+import { buildMarkdownReport } from '../../utils/build-markdown-report'
+import { downloadTextFile } from '../../utils/download-text-file'
 import { isAnalysisExportReportCandidate } from '../../utils/is-analysis-export-report-candidate'
 import { isGitBranchCompareReportCandidate } from '../../utils/is-git-branch-compare-report-candidate'
 import { isGitChurnReportCandidate } from '../../utils/is-git-churn-report-candidate'
@@ -18,11 +20,8 @@ export function Diagnostics({
   dependencyGraph,
   isLayouting,
   scanResult,
-  exportAnalysisReportJson,
-  exportAnalysisReportMarkdown,
   baselineReport,
   setBaselineReport,
-  baselineDelta,
   gitChurnReport,
   setGitChurnReport,
   churnHotFiles,
@@ -73,6 +72,126 @@ export function Diagnostics({
   const [gitLiveTargetCommitOverride, setGitLiveTargetCommitOverride] = useState('')
   const [isGitLiveLoading, setIsGitLiveLoading] = useState(false)
   const [gitLiveError, setGitLiveError] = useState<string | null>(null)
+
+  const analysisReport = useMemo<AnalysisExportReport>(() => {
+    return {
+      generatedAt: new Date().toISOString(),
+      projectRoot: scanResult?.rootName ?? null,
+      summary: {
+        tsFiles: scanResult?.tsFileCount ?? 0,
+        directories: scanResult?.directoryCount ?? 0,
+        dependencyEdges: dependencyGraph?.edges.length ?? 0,
+        cycleEdges: topCycleGroups.length,
+        unresolvedImports: dependencyGraph?.unresolvedImportCount ?? 0,
+        unresolvedInternal: dependencyGraph?.unresolvedInternalCount ?? 0,
+        unresolvedExternal: dependencyGraph?.unresolvedExternalCount ?? 0,
+        aliasResolved: dependencyGraph?.aliasResolvedCount ?? 0,
+      },
+      edgeKinds: dependencyEdgeKindCounts,
+      codeHealth: {
+        hotspots: hotspotFiles.map((item) => ({
+          path: item.path,
+          score: item.score,
+          incoming: item.incoming,
+          outgoing: item.outgoing,
+          loc: item.loc,
+        })),
+        deadExports: potentiallyDeadExportFiles.map((file) => ({
+          path: file.path,
+          exportCount: file.exports.length,
+          exports: file.exports,
+        })),
+        cycleGroups: topCycleGroups.map((group) => ({ id: group.id, size: group.size, files: group.filePaths })),
+      },
+      risk: { files: riskByFile, blocks: riskByBlock },
+      refactorSignals: {
+        orphanRuntimeModules,
+        reexportHubs: reexportHubFiles,
+        duplicateUtilityGroups,
+        reexportBottlenecks: reexportBottleneckFiles,
+        reexportChains,
+      },
+      architecture: {
+        rules: architectureRuleLines,
+        layerDistribution: architectureLayerDistribution,
+        violationsByKind: architectureViolationByKind,
+        violationsByLayerPair: architectureViolationByPair.map(([pair, count]) => ({ pair, count })),
+        violations: architectureViolations.map((item) => ({
+          kind: item.kind,
+          fromLayer: item.fromLayer,
+          toLayer: item.toLayer,
+          fromPath: item.fromPath,
+          toPath: item.toPath,
+        })),
+      },
+      graphSnapshot: {
+        files: dependencyGraph?.files.map((file) => file.path) ?? [],
+        edges:
+          dependencyGraph?.edges.map((edge) => ({
+            fromPath: edge.fromPath,
+            toPath: edge.toPath,
+            kind: edge.kind,
+          })) ?? [],
+      },
+    }
+  }, [
+    architectureLayerDistribution,
+    architectureRuleLines,
+    architectureViolationByKind,
+    architectureViolationByPair,
+    architectureViolations,
+    dependencyEdgeKindCounts,
+    dependencyGraph,
+    hotspotFiles,
+    orphanRuntimeModules,
+    potentiallyDeadExportFiles,
+    duplicateUtilityGroups,
+    reexportBottleneckFiles,
+    reexportChains,
+    reexportHubFiles,
+    riskByBlock,
+    riskByFile,
+    scanResult?.directoryCount,
+    scanResult?.rootName,
+    scanResult?.tsFileCount,
+    topCycleGroups,
+  ])
+
+  const baselineDelta = useMemo(() => {
+    if (!baselineReport) return null
+    return {
+      tsFiles: analysisReport.summary.tsFiles - baselineReport.summary.tsFiles,
+      directories: analysisReport.summary.directories - baselineReport.summary.directories,
+      dependencyEdges: analysisReport.summary.dependencyEdges - baselineReport.summary.dependencyEdges,
+      cycleEdges: analysisReport.summary.cycleEdges - baselineReport.summary.cycleEdges,
+      unresolvedImports: analysisReport.summary.unresolvedImports - baselineReport.summary.unresolvedImports,
+      unresolvedInternal: analysisReport.summary.unresolvedInternal - baselineReport.summary.unresolvedInternal,
+      unresolvedExternal: analysisReport.summary.unresolvedExternal - baselineReport.summary.unresolvedExternal,
+      aliasResolved: analysisReport.summary.aliasResolved - baselineReport.summary.aliasResolved,
+      edgeKinds: {
+        runtime: analysisReport.edgeKinds.runtime - baselineReport.edgeKinds.runtime,
+        type: analysisReport.edgeKinds.type - baselineReport.edgeKinds.type,
+        're-export': analysisReport.edgeKinds['re-export'] - baselineReport.edgeKinds['re-export'],
+      },
+      architectureViolations:
+        analysisReport.architecture.violations.length - baselineReport.architecture.violations.length,
+      orphanRuntimeModules:
+        analysisReport.refactorSignals.orphanRuntimeModules.length -
+        (baselineReport.refactorSignals?.orphanRuntimeModules?.length ?? 0),
+      reexportHubs:
+        analysisReport.refactorSignals.reexportHubs.length - (baselineReport.refactorSignals?.reexportHubs?.length ?? 0),
+    }
+  }, [analysisReport, baselineReport])
+
+  function exportAnalysisReportJson() {
+    const projectName = scanResult?.rootName ?? 'project'
+    downloadTextFile(`analysis-report-${projectName}.json`, JSON.stringify(analysisReport, null, 2), 'application/json;charset=utf-8')
+  }
+
+  function exportAnalysisReportMarkdown() {
+    const projectName = scanResult?.rootName ?? 'project'
+    downloadTextFile(`analysis-report-${projectName}.md`, buildMarkdownReport(analysisReport), 'text/markdown;charset=utf-8')
+  }
 
   function buildGitLiveUrl(path: string, params: Record<string, string>) {
     const normalizedBase = gitLiveApiBase.trim().replace(/\/+$/, '')

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   ARCHITECTURE_MATCHER_LAYERS,
   ARCHITECTURE_RULE_LAYERS,
@@ -9,9 +9,12 @@ import type { DependencyEdge, DependencyGraph, ScannedProject } from '../../lib/
 import type {
   ArchitectureConfig,
   ArchitectureConfigMode,
+  ArchitectureExportReport,
   ArchitectureLayerId,
   ArchitectureViolation,
 } from '../../types'
+import { buildArchitectureMarkdownReport } from '../../utils/build-architecture-markdown-report'
+import { downloadTextFile } from '../../utils/download-text-file'
 import { normalizeArchitectureConfig } from '../../utils/normalize-architecture-config'
 
 type ArchitectureProps = {
@@ -22,8 +25,6 @@ type ArchitectureProps = {
   architectureViolationByPair: Array<[string, number]>
   architectureConfig: ArchitectureConfig
   setArchitectureConfig: (config: ArchitectureConfig) => void
-  exportArchitectureReportJson: () => void
-  exportArchitectureReportMarkdown: () => void
   focusViolationOnBoard: (item: ArchitectureViolation) => void
   scanResult: ScannedProject | null
   dependencyGraph: DependencyGraph | null
@@ -37,12 +38,45 @@ export function Architecture({
   architectureViolationByPair,
   architectureConfig,
   setArchitectureConfig,
-  exportArchitectureReportJson,
-  exportArchitectureReportMarkdown,
   focusViolationOnBoard,
   scanResult,
   dependencyGraph,
 }: ArchitectureProps) {
+  const architectureReport = useMemo<ArchitectureExportReport>(
+    () => ({
+      generatedAt: new Date().toISOString(),
+      projectRoot: scanResult?.rootName ?? null,
+      rules: architectureRuleLines,
+      layerDistribution: architectureLayerDistribution,
+      violationsByKind: architectureViolationByKind,
+      violationsByLayerPair: architectureViolationByPair.map(([pair, count]) => ({ pair, count })),
+      violations: architectureViolations.map((item) => ({
+        kind: item.kind,
+        fromLayer: item.fromLayer,
+        toLayer: item.toLayer,
+        fromPath: item.fromPath,
+        toPath: item.toPath,
+      })),
+    }),
+    [
+      architectureLayerDistribution,
+      architectureRuleLines,
+      architectureViolationByKind,
+      architectureViolationByPair,
+      architectureViolations,
+      scanResult?.rootName,
+    ],
+  )
+
+  function exportArchitectureReportJson() {
+    const projectName = scanResult?.rootName ?? 'project'
+    downloadTextFile(`architecture-report-${projectName}.json`, JSON.stringify(architectureReport, null, 2), 'application/json;charset=utf-8')
+  }
+
+  function exportArchitectureReportMarkdown() {
+    const projectName = scanResult?.rootName ?? 'project'
+    downloadTextFile(`architecture-report-${projectName}.md`, buildArchitectureMarkdownReport(architectureReport), 'text/markdown;charset=utf-8')
+  }
   const [architectureConfigMode, setArchitectureConfigMode] = useState<ArchitectureConfigMode>('visual')
   const [architectureConfigDraft, setArchitectureConfigDraft] = useState(() =>
     JSON.stringify(architectureConfig, null, 2),

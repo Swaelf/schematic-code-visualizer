@@ -1,6 +1,10 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import { analyzeProjectDependenciesInWorker } from '../../lib/analyzer-worker-client'
 import type { BuiltGraph } from '../../lib/graph-builder'
 import type { DependencyGraph, ScannedProject } from '../../lib/models'
+import { scanProjectFolder } from '../../lib/scanner'
+import { readTsConfigAliasConfig } from '../../lib/tsconfig-reader'
+import { buildTreeLines } from '../../lib/tree-view'
 import {
   ProjectStructureViz,
   type StructureViewMode,
@@ -9,31 +13,93 @@ import {
 
 type OverviewProps = {
   scanResult: ScannedProject | null
+  setScanResult: (value: ScannedProject | null) => void
   dependencyGraph: DependencyGraph | null
+  setDependencyGraph: (value: DependencyGraph | null) => void
   flowGraph: BuiltGraph | null
   matchingFileNodeIds: Set<string>
-  isBusy: boolean
-  errorMessage: string | null
-  pickButtonLabel: () => string
-  handlePickDirectory: () => void
-  fileLocByPath: Map<string, number>
-  treeLines: string[]
+  setProjectReadmeName: (value: string | null) => void
+  setProjectReadmeContent: (value: string | null) => void
+}
+
+async function readProjectReadme(directoryHandle: FileSystemDirectoryHandle) {
+  const candidateNames = ['README.md', 'Readme.md', 'readme.md', 'README.MD']
+  for (const name of candidateNames) {
+    try {
+      const fileHandle = await directoryHandle.getFileHandle(name)
+      const file = await fileHandle.getFile()
+      return { name, content: await file.text() }
+    } catch {
+      // continue
+    }
+  }
+  return { name: null, content: null }
 }
 
 export function Overview({
   scanResult,
+  setScanResult,
   dependencyGraph,
+  setDependencyGraph,
   flowGraph,
   matchingFileNodeIds,
-  isBusy,
-  errorMessage,
-  pickButtonLabel,
-  handlePickDirectory,
-  fileLocByPath,
-  treeLines,
+  setProjectReadmeName,
+  setProjectReadmeContent,
 }: OverviewProps) {
+  const treeLines = useMemo(() => buildTreeLines(scanResult?.tree ?? null), [scanResult])
+  const fileLocByPath = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const file of scanResult?.files ?? []) {
+      const loc = file.content.split(/\r?\n/).length
+      map.set(file.path, Math.max(1, loc))
+    }
+    return map
+  }, [scanResult])
   const [overviewStructureMode, setOverviewStructureMode] = useState<StructureViewMode>('treemap')
   const [overviewTreemapMetric, setOverviewTreemapMetric] = useState<TreemapMetricMode>('files')
+  const [isScanning, setIsScanning] = useState(false)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const isBusy = isScanning || isAnalyzing
+  const isPickerAvailable = typeof window !== 'undefined' && 'showDirectoryPicker' in window
+
+  function pickButtonLabel() {
+    if (isScanning) return 'Scanning files...'
+    if (isAnalyzing) return 'Analyzing dependencies...'
+    return 'Select Project Folder'
+  }
+
+  async function handlePickDirectory() {
+    if (!isPickerAvailable) {
+      setErrorMessage('Your browser does not support File System Access API (use Chromium-based browser).')
+      return
+    }
+    setIsScanning(true)
+    setIsAnalyzing(false)
+    setErrorMessage(null)
+    try {
+      const directoryHandle = await window.showDirectoryPicker({ mode: 'read' })
+      const readme = await readProjectReadme(directoryHandle)
+      setProjectReadmeName(readme.name)
+      setProjectReadmeContent(readme.content)
+      const scannedProject = await scanProjectFolder(directoryHandle)
+      const tsconfigAliases = await readTsConfigAliasConfig(directoryHandle)
+      setScanResult(scannedProject)
+      setIsAnalyzing(true)
+      const graph = await analyzeProjectDependenciesInWorker(scannedProject.files, {
+        rootName: scannedProject.rootName,
+        tsconfigAliases,
+      })
+      setDependencyGraph(graph)
+    } catch (error) {
+      if ((error as DOMException).name === 'AbortError') return
+      setErrorMessage('Failed to scan or analyze the selected directory.')
+      console.error(error)
+    } finally {
+      setIsScanning(false)
+      setIsAnalyzing(false)
+    }
+  }
   return (
     <section className="panel grid">
       <div className="stats">

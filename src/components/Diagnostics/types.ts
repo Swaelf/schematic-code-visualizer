@@ -68,15 +68,12 @@ export type DiagnosticsProps = {
   dependencyGraph: DependencyGraph | null
   isLayouting: boolean
 
-  // Export buttons
+  // Export
   scanResult: ScannedProject | null
-  exportAnalysisReportJson: () => void
-  exportAnalysisReportMarkdown: () => void
 
-  // Baseline compare (report itself stays in App for downstream computation)
+  // Baseline compare (report itself stays in App for downstream computation; delta is computed locally)
   baselineReport: AnalysisExportReport | null
   setBaselineReport: (value: AnalysisExportReport | null) => void
-  baselineDelta: BaselineDelta | null
 
   // Git churn (report itself stays in App; consumed by hot-files memo there)
   gitChurnReport: GitChurnReport | null
