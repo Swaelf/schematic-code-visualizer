@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { Background, MiniMap, ReactFlow, type Edge, type NodeMouseHandler } from '@xyflow/react'
 import { BusEdge } from './components/BusEdge'
 import { ClassicEdge } from './components/ClassicEdge'
@@ -729,6 +729,8 @@ function mergeBranchDiffBuckets(
 
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('overview')
+  const canvasShellRef = useRef<HTMLDivElement | null>(null)
+  const [isCanvasFullscreen, setIsCanvasFullscreen] = useState(false)
   const [overviewStructureMode, setOverviewStructureMode] = useState<StructureViewMode>('treemap')
   const [overviewTreemapMetric, setOverviewTreemapMetric] = useState<TreemapMetricMode>('files')
   const [scanResult, setScanResult] = useState<ScannedProject | null>(null)
@@ -2751,6 +2753,27 @@ function App() {
       }`
     : (hoveredFilePath ?? '-')
   const selectedInfoLine = selectedNodeId ?? '-'
+  const selectedFilePath = useMemo(() => {
+    if (!selectedNodeId) return null
+    if (selectedNodeId.startsWith('file:')) return selectedNodeId.slice('file:'.length)
+    return null
+  }, [selectedNodeId])
+  const selectedImportedFiles = useMemo(() => {
+    if (!selectedFilePath || !dependencyGraph) return [] as string[]
+    const set = new Set<string>()
+    for (const edge of dependencyGraph.edges) {
+      if (edge.fromPath === selectedFilePath) set.add(edge.toPath)
+    }
+    return Array.from(set).sort()
+  }, [selectedFilePath, dependencyGraph])
+  const selectedImportedByFiles = useMemo(() => {
+    if (!selectedFilePath || !dependencyGraph) return [] as string[]
+    const set = new Set<string>()
+    for (const edge of dependencyGraph.edges) {
+      if (edge.toPath === selectedFilePath) set.add(edge.fromPath)
+    }
+    return Array.from(set).sort()
+  }, [selectedFilePath, dependencyGraph])
 
   function toggleSelectedBlockCollapse() {
     if (!selectedBlockId || graphMode !== 'file-level') {
@@ -3212,6 +3235,24 @@ function App() {
     }
     applyFolderDepthPreset(manualFolderDepth)
   }, [flowGraph, graphMode, autoFolderDepth, manualFolderDepth, folderControlMode])
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsCanvasFullscreen(document.fullscreenElement === canvasShellRef.current)
+    }
+    document.addEventListener('fullscreenchange', handleFullscreenChange)
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange)
+  }, [])
+
+  const toggleCanvasFullscreen = () => {
+    const element = canvasShellRef.current
+    if (!element) return
+    if (document.fullscreenElement === element) {
+      void document.exitFullscreen()
+    } else {
+      void element.requestFullscreen()
+    }
+  }
 
   return (
     <main className="app-shell">
@@ -4469,7 +4510,15 @@ function App() {
                     : ''}
                   {isLayouting ? ' | Layout: running...' : ' | Layout: ELK ready'}
                 </p>
-                <div className="canvas-shell">
+                <div className="canvas-shell" ref={canvasShellRef}>
+                  <button
+                    type="button"
+                    className="canvas-fullscreen-btn"
+                    onClick={toggleCanvasFullscreen}
+                    title={isCanvasFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                  >
+                    {isCanvasFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                  </button>
                   <ReactFlow
                     key={`rf-${graphMode}-${routingStyle}-${busDisplayMode}-${folderPacking}-${
                       routingStyle === 'classic'
@@ -4532,6 +4581,58 @@ function App() {
                 <p className="canvas-hover-strip" title={hoverInfoLine}>
                   Hover: <span className="canvas-hover-value">{hoverInfoLine}</span>
                 </p>
+                <div className="canvas-selected-io">
+                  {selectedFilePath ? (
+                    <>
+                      <div className="canvas-selected-io-col">
+                        <h4 title="Files this file imports">
+                          Imports ({selectedImportedFiles.length})
+                        </h4>
+                        {selectedImportedFiles.length > 0 ? (
+                          <ul>
+                            {selectedImportedFiles.map((path) => (
+                              <li
+                                key={`imp-${path}`}
+                                title={path}
+                                onClick={() => setSelectedNodeId(`file:${path}`)}
+                              >
+                                {path}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="canvas-selected-io-empty">none</p>
+                        )}
+                      </div>
+                      <div className="canvas-selected-io-col">
+                        <h4 title="Files that import this file">
+                          Used by ({selectedImportedByFiles.length})
+                        </h4>
+                        {selectedImportedByFiles.length > 0 ? (
+                          <ul>
+                            {selectedImportedByFiles.map((path) => (
+                              <li
+                                key={`impby-${path}`}
+                                title={path}
+                                onClick={() => setSelectedNodeId(`file:${path}`)}
+                              >
+                                {path}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="canvas-selected-io-empty">none</p>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <p className="canvas-selected-io-empty">
+                      {selectedNodeId
+                        ? 'Select a file node to see incoming and outgoing imports.'
+                        : 'No file selected.'}
+                    </p>
+                  )}
+                </div>
               </>
             ) : (
               <p className="canvas-meta">Scan a folder to build and render dependency canvas.</p>

@@ -1,5 +1,5 @@
 .app-shell {
-  max-width: 1100px;
+  width: 100%;
   margin: 0 auto;
   padding: 24px;
   display: flex;
@@ -19,6 +19,12 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.tab-nav button {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
 }
 
 .tab-nav button.is-active {
@@ -628,12 +634,40 @@ button:disabled {
 }
 
 .canvas-shell {
+  position: relative;
   border-radius: 12px;
   overflow: hidden;
   border: 1px solid rgba(110, 152, 190, 0.4);
   height: 70vh;
   min-height: 420px;
   background: rgba(3, 14, 25, 0.9);
+}
+
+.canvas-shell:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  border: none;
+}
+
+.canvas-fullscreen-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 10;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid rgba(110, 152, 190, 0.55);
+  color: #e1f6ff;
+  background: rgba(8, 25, 45, 0.85);
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+}
+
+.canvas-fullscreen-btn:hover {
+  background: rgba(20, 91, 134, 0.9);
 }
 
 .canvas-hover-strip {
@@ -660,6 +694,64 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.canvas-selected-io {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(110, 152, 190, 0.35);
+  background: rgba(4, 13, 24, 0.7);
+}
+
+.canvas-selected-io-col {
+  min-width: 0;
+}
+
+.canvas-selected-io-col h4 {
+  margin: 0 0 6px;
+  font-size: 0.82rem;
+  color: #b7d4ea;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.canvas-selected-io-col ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 180px;
+  overflow: auto;
+  font-size: 0.82rem;
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.canvas-selected-io-col li {
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.canvas-selected-io-col li:nth-child(odd) {
+  background: rgba(110, 152, 190, 0.08);
+}
+
+.canvas-selected-io-col li:hover {
+  background: rgba(47, 143, 203, 0.25);
+  color: #ffe6b6;
+}
+
+.canvas-selected-io-empty {
+  margin: 0;
+  color: #88a4be;
+  font-size: 0.82rem;
+  font-style: italic;
 }
 
 .canvas-hover-value {
