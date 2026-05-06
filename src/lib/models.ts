@@ -37,6 +37,8 @@ export type DependencyEdge = {
 export type DependencyGraph = {
   files: FileAnalysis[]
   edges: DependencyEdge[]
+  externalEdges: DependencyEdge[]
+  externalPackages: string[]
   unresolvedImportCount: number
   unresolvedExternalCount: number
   unresolvedInternalCount: number

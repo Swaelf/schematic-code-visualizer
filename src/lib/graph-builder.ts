@@ -29,6 +29,82 @@ type GraphOptions = {
   routingStyle?: RoutingStyle
   folderPacking?: FolderPackingMode
   edgeKindFilter?: 'all' | DependencyEdge['kind']
+  includeExternalImports?: boolean
+}
+
+export const EXTERNAL_BLOCK_ID = 'block:__external__'
+const EXTERNAL_CHIP_WIDTH = 200
+const EXTERNAL_CHIP_HEIGHT = 38
+const EXTERNAL_CHIP_GAP = 6
+
+function buildExternalBlock(dependencyGraph: DependencyGraph): { block: Node; chips: Node[]; usageCountByPackage: Map<string, number> } | null {
+  const packages = dependencyGraph.externalPackages
+  if (packages.length === 0) return null
+  const usageCountByPackage = new Map<string, number>()
+  for (const edge of dependencyGraph.externalEdges) {
+    const key = edge.toPath
+    usageCountByPackage.set(key, (usageCountByPackage.get(key) ?? 0) + 1)
+  }
+  const headerSpace = BLOCK_PADDING + BLOCK_HEADER_HEIGHT
+  const footerSpace = BLOCK_PADDING + BLOCK_CONTENT_BOTTOM_PADDING
+  const totalChipsHeight = packages.length * EXTERNAL_CHIP_HEIGHT + Math.max(0, packages.length - 1) * EXTERNAL_CHIP_GAP
+  const blockWidth = BLOCK_PADDING * 2 + EXTERNAL_CHIP_WIDTH
+  const blockHeight = headerSpace + totalChipsHeight + footerSpace
+  const block: Node = {
+    id: EXTERNAL_BLOCK_ID,
+    type: 'folderBlock',
+    position: { x: 0, y: 0 },
+    data: {
+      label: `External (${packages.length})`,
+      importCount: 0,
+      exportCount: dependencyGraph.externalEdges.length,
+    },
+    style: {
+      width: blockWidth,
+      height: blockHeight,
+      borderRadius: 12,
+      border: '1px solid #b97aff',
+      background: 'rgba(38, 24, 60, 0.78)',
+    },
+  }
+  const chips: Node[] = packages.map((packageName, index) => {
+    const path = `external:${packageName}`
+    const usageCount = usageCountByPackage.get(path) ?? 0
+    return {
+      id: `file:${path}`,
+      type: 'chipFile',
+      parentId: EXTERNAL_BLOCK_ID,
+      extent: 'parent',
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
+      position: {
+        x: BLOCK_PADDING,
+        y: headerSpace - BLOCK_HEADER_HEIGHT + BLOCK_PADDING + index * (EXTERNAL_CHIP_HEIGHT + EXTERNAL_CHIP_GAP),
+      },
+      data: {
+        label: packageName,
+        path,
+        importCount: usageCount,
+        exportCount: 0,
+        isExternal: true,
+      },
+      style: {
+        width: EXTERNAL_CHIP_WIDTH,
+        height: EXTERNAL_CHIP_HEIGHT,
+        borderRadius: 8,
+        border: '1px solid #b97aff',
+        background: 'rgba(58, 38, 96, 0.85)',
+        color: '#ecdfff',
+        fontSize: 11,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        textAlign: 'center',
+        padding: '0 8px',
+      },
+    }
+  })
+  return { block, chips, usageCountByPackage }
 }
 
 type ConnectionItem = {
@@ -812,16 +888,37 @@ export function buildDependencyFlowGraph(
       cycleFolderNodeIds,
       folderPacking,
     )
+
+    const includeExternal = options.includeExternalImports ?? false
+    const externalArtifacts = includeExternal ? buildExternalBlock(dependencyGraph) : null
+    const finalNodes = externalArtifacts
+      ? [externalArtifacts.block, ...externalArtifacts.chips, ...hierarchical.nodes]
+      : hierarchical.nodes
+    const fileNodeToBlock = new Map(hierarchical.fileNodeToBlock)
+    if (externalArtifacts) {
+      for (const chip of externalArtifacts.chips) {
+        fileNodeToBlock.set(chip.id, EXTERNAL_BLOCK_ID)
+      }
+    }
+    const externalEdgesFiltered =
+      externalArtifacts && (edgeKindFilter === 'all' || edgeKindFilter === 'runtime')
+        ? dependencyGraph.externalEdges.filter((edge) => edgeKindFilter === 'all' || edge.kind === edgeKindFilter)
+        : []
+    const combinedDepGraph: DependencyGraph =
+      externalEdgesFiltered.length > 0
+        ? { ...filteredDependencyGraph, edges: [...filteredDependencyGraph.edges, ...externalEdgesFiltered] }
+        : filteredDependencyGraph
+
     return {
-      nodes: hierarchical.nodes,
+      nodes: finalNodes,
       edges: createFileEdges(
-        filteredDependencyGraph,
-        hierarchical.fileNodeToBlock,
+        combinedDepGraph,
+        fileNodeToBlock,
         fileCycles.cycleEdgeKeys,
         highlightCycles,
         routingStyle,
       ),
-      blockCount: hierarchical.blockCount,
+      blockCount: hierarchical.blockCount + (externalArtifacts ? 1 : 0),
       blockLayoutEdges: hierarchical.blockLayoutEdges,
       cycleEdgeCount: fileCycles.cycleEdgeKeys.size,
     }

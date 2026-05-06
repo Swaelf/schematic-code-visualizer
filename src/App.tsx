@@ -11,6 +11,8 @@ import {
   type TreemapMetricMode,
 } from './components/ProjectStructureViz'
 import { analyzeProjectDependenciesInWorker } from './lib/analyzer-worker-client'
+import { computeBusRoutes } from './lib/bus-router'
+import { routeDirectOrthogonal } from './lib/direct-router'
 import { applyElkToBlockNodes } from './lib/elk-layout'
 import {
   buildDependencyFlowGraph,
@@ -26,7 +28,6 @@ import './App.css'
 import '@xyflow/react/dist/style.css'
 
 type AppTab = 'overview' | 'board' | 'dependencies' | 'diagnostics' | 'architecture' | 'about'
-type BusDisplayMode = 'detailed' | 'trunk-only'
 type FolderControlMode = 'preset' | 'manual'
 type ManualFolderDepth = 'any' | number
 type EdgeKindFilter = 'all' | DependencyEdge['kind']
@@ -739,9 +740,11 @@ function App() {
   const [dependencyGraph, setDependencyGraph] = useState<DependencyGraph | null>(null)
   const [graphMode, setGraphMode] = useState<GraphBuildMode>('file-level')
   const [routingStyle, setRoutingStyle] = useState<RoutingStyle>('classic')
-  const [busDisplayMode, setBusDisplayMode] = useState<BusDisplayMode>('detailed')
   const [folderPacking, setFolderPacking] = useState<FolderPackingMode>('balanced')
   const [highlightCycles, setHighlightCycles] = useState(false)
+  const [showExternalImports, setShowExternalImports] = useState(true)
+  const [simplifyHighlightedRoutes, setSimplifyHighlightedRoutes] = useState(true)
+  const [traceIntoCollapsedFolders, setTraceIntoCollapsedFolders] = useState(true)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [directionFilter, setDirectionFilter] = useState<'all' | 'incoming' | 'outgoing'>('all')
   const [edgeKindFilter, setEdgeKindFilter] = useState<EdgeKindFilter>('all')
@@ -1728,8 +1731,9 @@ function App() {
       routingStyle,
       folderPacking,
       edgeKindFilter,
+      includeExternalImports: showExternalImports,
     })
-  }, [scanResult, dependencyGraph, graphMode, highlightCycles, routingStyle, folderPacking, edgeKindFilter])
+  }, [scanResult, dependencyGraph, graphMode, highlightCycles, routingStyle, folderPacking, edgeKindFilter, showExternalImports])
 
   const fileNodeToBlockId = useMemo(() => {
     const map = new Map<string, string>()
@@ -1830,9 +1834,51 @@ function App() {
     if (!flowGraph) {
       return []
     }
-    let filteredByCollapse = flowGraph.edges.filter(
-      (edge) => !hiddenNodeIds.has(edge.source) && !hiddenNodeIds.has(edge.target),
-    )
+    const parentByNodeId = new Map<string, string>()
+    for (const node of flowGraph.nodes) {
+      if (node.parentId) parentByNodeId.set(node.id, node.parentId)
+    }
+    const findVisibleAncestor = (nodeId: string): string | null => {
+      let cur: string | undefined = nodeId
+      while (cur && hiddenNodeIds.has(cur)) {
+        cur = parentByNodeId.get(cur)
+      }
+      return cur ?? null
+    }
+    let filteredByCollapse: Edge[]
+    if (traceIntoCollapsedFolders && selectedNodeId) {
+      filteredByCollapse = []
+      for (const edge of flowGraph.edges) {
+        const sourceHidden = hiddenNodeIds.has(edge.source)
+        const targetHidden = hiddenNodeIds.has(edge.target)
+        if (!sourceHidden && !targetHidden) {
+          filteredByCollapse.push(edge)
+          continue
+        }
+        // Only redirect when the visible endpoint is the selected node — otherwise drop.
+        const visibleEnd = sourceHidden ? edge.target : edge.source
+        if (visibleEnd !== selectedNodeId) continue
+        const newSource = sourceHidden ? findVisibleAncestor(edge.source) : edge.source
+        const newTarget = targetHidden ? findVisibleAncestor(edge.target) : edge.target
+        if (!newSource || !newTarget || newSource === newTarget) continue
+        filteredByCollapse.push({
+          ...edge,
+          id: `${edge.id}::traced`,
+          source: newSource,
+          target: newTarget,
+          data: {
+            ...(edge.data ?? {}),
+            tracedToCollapsed: true,
+            originalSource: edge.source,
+            originalTarget: edge.target,
+          },
+        })
+      }
+    } else {
+      filteredByCollapse = flowGraph.edges.filter(
+        (edge) => !hiddenNodeIds.has(edge.source) && !hiddenNodeIds.has(edge.target),
+      )
+    }
     if (showBaselineDiff && showOnlyNewDiff && hasBaselineGraphSnapshot) {
       filteredByCollapse = filteredByCollapse.filter((edge) => {
         const isFileEdge = edge.source.startsWith('file:') && edge.target.startsWith('file:')
@@ -1872,6 +1918,7 @@ function App() {
     highlightOnlyChangedBranchEdges,
     branchDiffBucketByFileNodeId,
     branchDiffBucketsByBlockId,
+    traceIntoCollapsedFolders,
   ])
 
   const connectedNodeIds = useMemo(() => {
@@ -2046,291 +2093,94 @@ function App() {
     branchDiffVisibleBlockIds,
   ])
 
-  const displayEdges = useMemo<Edge[]>(() => {
-    const edgeRenderToken = `${routingStyle}|${busDisplayMode}|${selectedNodeId ?? 'none'}|${directionFilter}|${edgeColorPriority}|${
-      showBaselineDiff ? 'diff-on' : 'diff-off'
-    }|${showOnlyNewDiff ? 'only-new' : 'all-diff'}|branch-${branchDiffView}`
+  const busRouteIndex = useMemo(
+    () =>
+      computeBusRoutes({
+        visibleNodes,
+        visibleEdges,
+        fileNodeToBlockId,
+        routingStyle,
+      }),
+    [visibleNodes, visibleEdges, fileNodeToBlockId, routingStyle],
+  )
+
+  const directRouteContext = useMemo(() => {
+    type Rect = { x: number; y: number; width: number; height: number }
     const nodeById = new Map(visibleNodes.map((node) => [node.id, node]))
-    const parentById = new Map<string, string>()
+    const parentByNodeId = new Map<string, string>()
     for (const node of visibleNodes) {
-      if (node.parentId) {
-        parentById.set(node.id, node.parentId)
-      }
+      if (node.parentId) parentByNodeId.set(node.id, node.parentId)
     }
-
-    const absoluteRectById = new Map<string, { x: number; y: number; width: number; height: number }>()
-    const segmentLogicalIds = new Map<string, Set<string>>()
-    const folderNodeIds = new Set(visibleNodes.filter((node) => node.id.startsWith('block:')).map((node) => node.id))
-
-    const getAbsoluteRect = (nodeId: string): { x: number; y: number; width: number; height: number } | null => {
-      const cached = absoluteRectById.get(nodeId)
-      if (cached) {
-        return cached
-      }
+    const rectById = new Map<string, Rect>()
+    const computeRect = (nodeId: string): Rect | null => {
+      const cached = rectById.get(nodeId)
+      if (cached) return cached
       const node = nodeById.get(nodeId)
-      if (!node) {
-        return null
-      }
-
+      if (!node) return null
       const width = Number(node.style?.width ?? 0)
       const height = Number(node.style?.height ?? 0)
-      let rect: { x: number; y: number; width: number; height: number }
+      let rect: Rect
       if (!node.parentId) {
         rect = { x: node.position.x, y: node.position.y, width, height }
       } else {
-        const parentRect = getAbsoluteRect(node.parentId)
-        if (!parentRect) {
-          return null
-        }
-        rect = {
-          x: parentRect.x + node.position.x,
-          y: parentRect.y + node.position.y,
-          width,
-          height,
-        }
+        const parentRect = computeRect(node.parentId)
+        if (!parentRect) return null
+        rect = { x: parentRect.x + node.position.x, y: parentRect.y + node.position.y, width, height }
       }
-      absoluteRectById.set(nodeId, rect)
+      rectById.set(nodeId, rect)
       return rect
     }
-
+    for (const node of visibleNodes) computeRect(node.id)
+    // Obstacles: files + collapsed folders that are in the current highlight set
+    // (i.e., the selected node and its visible neighbours). Unrelated/dimmed nodes
+    // are transparent — wires pass through them freely. Expanded folders are also
+    // transparent so the direct router can hop diagonal-ish through containers.
+    const baseObstacles: Array<{ id: string; rect: Rect }> = []
     for (const node of visibleNodes) {
-      getAbsoluteRect(node.id)
-    }
-
-    const getFolderChain = (folderId: string) => {
-      const chain: string[] = []
-      let current: string | undefined = folderId
-      while (current && folderNodeIds.has(current)) {
-        chain.push(current)
-        current = parentById.get(current)
-      }
-      return chain
-    }
-
-    const findFolderLca = (leftFolderId: string, rightFolderId: string) => {
-      const leftChain = getFolderChain(leftFolderId)
-      const rightSet = new Set(getFolderChain(rightFolderId))
-      for (const folderId of leftChain) {
-        if (rightSet.has(folderId)) {
-          return folderId
-        }
-      }
-      return null
-    }
-
-    const getChildUnderAncestor = (folderId: string, ancestorId: string) => {
-      if (folderId === ancestorId) {
-        return folderId
-      }
-      let current = folderId
-      let parent = parentById.get(current)
-      while (parent && parent !== ancestorId) {
-        current = parent
-        parent = parentById.get(current)
-      }
-      return parent === ancestorId ? current : folderId
-    }
-
-    const blockPairKey = (sourceBlockId: string, targetBlockId: string) => `${sourceBlockId}->${targetBlockId}`
-    const laneInfoByEdgeId = new Map<string, { lane: number; laneCount: number; pairKey: string }>()
-    const pairMetaByKey = new Map<string, { count: number; primaryEdgeId: string }>()
-    const logicalEdgeIdsByPair = new Map<string, string[]>()
-    const routingFolderByEdgeId = new Map<
-      string,
-      {
-        sourceLeafFolderId: string
-        targetLeafFolderId: string
-        sourceRouteFolderId: string
-        targetRouteFolderId: string
-        lcaFolderId: string | null
-      }
-    >()
-    const compactTrunkMode = routingStyle === 'bus' && busDisplayMode === 'trunk-only'
-    const roundPoint = (value: number) => Math.round(value * 10) / 10
-    const segmentIdFromPoints = (
-      sourceBlockId: string,
-      targetBlockId: string,
-      pairKey: string,
-      from: { x: number; y: number },
-      to: { x: number; y: number },
-    ) =>
-      [
-        'seg',
-        sourceBlockId,
-        targetBlockId,
-        pairKey,
-        `${roundPoint(from.x)}:${roundPoint(from.y)}`,
-        `${roundPoint(to.x)}:${roundPoint(to.y)}`,
-      ].join('|')
-
-    const resolveRoutingFolders = (edge: Edge) => {
-      const cached = routingFolderByEdgeId.get(edge.id)
-      if (cached) {
-        return cached
-      }
-      const sourceLeafFolderId = fileNodeToBlockId.get(edge.source) ?? edge.source
-      const targetLeafFolderId = fileNodeToBlockId.get(edge.target) ?? edge.target
-      const lcaFolderId = findFolderLca(sourceLeafFolderId, targetLeafFolderId)
-      const sourceRouteFolderId = lcaFolderId
-        ? getChildUnderAncestor(sourceLeafFolderId, lcaFolderId)
-        : sourceLeafFolderId
-      const targetRouteFolderId = lcaFolderId
-        ? getChildUnderAncestor(targetLeafFolderId, lcaFolderId)
-        : targetLeafFolderId
-
-      const resolved = {
-        sourceLeafFolderId,
-        targetLeafFolderId,
-        sourceRouteFolderId,
-        targetRouteFolderId,
-        lcaFolderId,
-      }
-      routingFolderByEdgeId.set(edge.id, resolved)
-      return resolved
-    }
-
-    const aggregationPairKey = (edge: Edge, sourceBlockId: string, targetBlockId: string) => {
-      const baseKey = blockPairKey(sourceBlockId, targetBlockId)
-      if (!compactTrunkMode || !selectedNodeId || sourceBlockId !== targetBlockId) {
-        return baseKey
-      }
-      const isOutgoing = edge.source === selectedNodeId
-      const isIncoming = edge.target === selectedNodeId
-      if (isOutgoing && !isIncoming) {
-        return `${baseKey}|out`
-      }
-      if (isIncoming && !isOutgoing) {
-        return `${baseKey}|in`
-      }
-      return `${baseKey}|self`
-    }
-
-    if (routingStyle === 'bus') {
-      const edgeIdsByPair = new Map<string, string[]>()
-      for (const edge of visibleEdges) {
-        if (!edge.source.startsWith('file:') || !edge.target.startsWith('file:')) {
-          continue
-        }
-        const routed = resolveRoutingFolders(edge)
-        const key = aggregationPairKey(edge, routed.sourceRouteFolderId, routed.targetRouteFolderId)
-        const existing = edgeIdsByPair.get(key)
-        if (existing) {
-          existing.push(edge.id)
-        } else {
-          edgeIdsByPair.set(key, [edge.id])
-        }
-      }
-      for (const [pairKey, edgeIds] of edgeIdsByPair.entries()) {
-        edgeIds.sort((left, right) => left.localeCompare(right))
-        const laneCount = edgeIds.length
-        logicalEdgeIdsByPair.set(pairKey, [...edgeIds])
-        pairMetaByKey.set(pairKey, { count: laneCount, primaryEdgeId: edgeIds[0] })
-        edgeIds.forEach((edgeId, lane) => {
-          laneInfoByEdgeId.set(edgeId, { lane, laneCount, pairKey })
-        })
+      if (!connectedNodeIds.has(node.id)) continue
+      const rect = rectById.get(node.id)
+      if (!rect) continue
+      const isFile = node.id.startsWith('file:')
+      const isCollapsedFolder = node.id.startsWith('block:') && collapsedBlockIds.has(node.id)
+      if (isFile || isCollapsedFolder) {
+        baseObstacles.push({ id: node.id, rect })
       }
     }
-
-    const createBusPoints = (edge: Edge) => {
-      if (routingStyle !== 'bus' || !edge.source.startsWith('file:') || !edge.target.startsWith('file:')) {
-        return null
+    const ancestorIds = (nodeId: string): Set<string> => {
+      const set = new Set<string>([nodeId])
+      let cur: string | undefined = parentByNodeId.get(nodeId)
+      while (cur) {
+        set.add(cur)
+        cur = parentByNodeId.get(cur)
       }
+      return set
+    }
+    return { rectById, parentByNodeId, baseObstacles, ancestorIds }
+  }, [visibleNodes, collapsedBlockIds, connectedNodeIds])
 
-      const routed = resolveRoutingFolders(edge)
-      const sourceBlockId = routed.sourceRouteFolderId
-      const targetBlockId = routed.targetRouteFolderId
-      const sourceRect = absoluteRectById.get(edge.source)
-      const targetRect = absoluteRectById.get(edge.target)
-      const sourceBlockRect = absoluteRectById.get(sourceBlockId)
-      const targetBlockRect = absoluteRectById.get(targetBlockId)
-
-      if (!sourceRect || !targetRect || !sourceBlockRect || !targetBlockRect) {
-        return null
-      }
-
-      const laneInfo = laneInfoByEdgeId.get(edge.id)
-      const lane = laneInfo?.lane ?? 0
-      const laneCount = laneInfo?.laneCount ?? 1
-      const pairKey = laneInfo?.pairKey ?? blockPairKey(sourceBlockId, targetBlockId)
-      const pairMeta = pairMetaByKey.get(pairKey)
-      const laneShift = (lane - (laneCount - 1) / 2) * 7
-      const laneShiftForGeometry = compactTrunkMode ? 0 : laneShift
-      const isPairPrimary = pairMeta?.primaryEdgeId === edge.id
-      const logicalEdgeIds = logicalEdgeIdsByPair.get(pairKey) ?? [edge.id]
-
-      const sourcePoint = { x: sourceRect.x + sourceRect.width, y: sourceRect.y + sourceRect.height / 2 }
-      const targetPoint = { x: targetRect.x, y: targetRect.y + targetRect.height / 2 }
-      const sourceExportBusY = sourceBlockRect.y + sourceBlockRect.height - 16
-      const targetImportBusY = targetBlockRect.y + 16
-      const sourceBoundaryPin = { x: sourceBlockRect.x + sourceBlockRect.width + 5, y: sourceExportBusY }
-      const targetBoundaryPin = { x: targetBlockRect.x - 5, y: targetImportBusY }
-      const sourceOuterX = sourceBlockRect.x + sourceBlockRect.width + 22 + laneShiftForGeometry
-      const localBridgeX = sourceOuterX
-      const trunkY = sourceExportBusY + (targetImportBusY - sourceExportBusY) * 0.5
-      const sourceTrunkX = sourceBoundaryPin.x + 12
-      const targetTrunkX = targetBoundaryPin.x - 12
-      const sourceBranchX = sourceBoundaryPin.x + 20 + laneShiftForGeometry
-      const targetBranchX = targetBoundaryPin.x - 20 + laneShiftForGeometry
-      const isCrossFolder = sourceBlockId !== targetBlockId
-
-      const points =
-        !isCrossFolder
-          ? [
-              sourcePoint,
-              { x: sourcePoint.x + 8, y: sourcePoint.y },
-              { x: sourcePoint.x + 8, y: sourceExportBusY },
-              { x: localBridgeX, y: sourceExportBusY },
-              { x: localBridgeX, y: targetImportBusY },
-              { x: targetPoint.x - 8, y: targetImportBusY },
-              { x: targetPoint.x - 8, y: targetPoint.y },
-              targetPoint,
-            ]
-          : compactTrunkMode
-            ? [
-                sourcePoint,
-                { x: sourcePoint.x + 8, y: sourcePoint.y },
-                { x: sourcePoint.x + 8, y: sourceExportBusY },
-                { x: sourceBoundaryPin.x, y: sourceExportBusY },
-                { x: sourceTrunkX, y: sourceExportBusY },
-                { x: sourceTrunkX, y: trunkY },
-                { x: targetTrunkX, y: trunkY },
-                { x: targetTrunkX, y: targetImportBusY },
-                { x: targetBoundaryPin.x, y: targetImportBusY },
-                { x: targetPoint.x - 8, y: targetImportBusY },
-                { x: targetPoint.x - 8, y: targetPoint.y },
-                targetPoint,
-              ]
-          : [
-              sourcePoint,
-              { x: sourcePoint.x + 8, y: sourcePoint.y },
-              { x: sourcePoint.x + 8, y: sourceExportBusY },
-              { x: sourceBoundaryPin.x, y: sourceExportBusY },
-              { x: sourceBranchX, y: sourceExportBusY },
-              { x: sourceBranchX, y: trunkY },
-              { x: sourceTrunkX, y: trunkY },
-              { x: targetTrunkX, y: trunkY },
-              { x: targetBranchX, y: trunkY },
-              { x: targetBranchX, y: targetImportBusY },
-              { x: targetBoundaryPin.x, y: targetImportBusY },
-              { x: targetPoint.x - 8, y: targetImportBusY },
-              { x: targetPoint.x - 8, y: targetPoint.y },
-              targetPoint,
-            ]
-
+  const renderedNodes = useMemo(() => {
+    if (busRouteIndex.pinsByFolderId.size === 0) return visibleNodes
+    return visibleNodes.map((node) => {
+      if (!node.id.startsWith('block:')) return node
+      const pins = busRouteIndex.pinsByFolderId.get(node.id)
+      if (!pins) return node
       return {
-        points,
-        lane,
-        laneCount,
-        pairKey,
-        pairMeta,
-        isCrossFolder,
-        isPairPrimary,
-        logicalEdgeIds,
-        sourceBlockId,
-        targetBlockId,
+        ...node,
+        data: {
+          ...(node.data ?? {}),
+          exportPinYs: pins.exports,
+          importPinYs: pins.imports,
+        },
       }
-    }
+    })
+  }, [visibleNodes, busRouteIndex])
 
+  const displayEdges = useMemo<Edge[]>(() => {
+    // Token in the edge id only includes inputs that change geometry / edge type.
+    // Selection-driven styling propagates through `data` and `style`, so it must NOT
+    // mutate the id — otherwise old edges briefly co-exist with the new ones during
+    // remount and leave stale paths behind on the canvas.
+    const edgeRenderToken = `${routingStyle}`
     const selectedLogicalEdgeIds = selectedNodeId ? new Set(visibleEdges.map((edge) => edge.id)) : new Set<string>()
     const isBranchOverlayEnabled = branchDiffView !== 'off' && !!gitBranchCompareReport
     const getBranchColor = (bucket: Exclude<BranchDiffView, 'off' | 'all'>) => {
@@ -2447,6 +2297,7 @@ function App() {
         strokeOpacity = Math.min(strokeOpacity, 0.18)
       }
 
+      const isTracedEdge = !!(edge.data as { tracedToCollapsed?: boolean } | undefined)?.tracedToCollapsed
       const baseEdge: Edge = {
         ...edge,
         id: `${edge.id}::${edgeRenderToken}`,
@@ -2454,7 +2305,8 @@ function App() {
         style: {
           ...(edge.style ?? {}),
           stroke: color,
-          strokeWidth,
+          strokeWidth: isTracedEdge ? Math.max(strokeWidth, 1.6) : strokeWidth,
+          strokeDasharray: isTracedEdge ? '5 4' : undefined,
           opacity: strokeOpacity,
         },
         markerEnd:
@@ -2463,51 +2315,68 @@ function App() {
             : { type: 'arrowclosed' as const, color },
       }
 
-      const bus = createBusPoints(edge)
+      // Direct orthogonal routing kicks in for highlighted edges (when simplify is on)
+      // and ALWAYS for traced edges (the bus router can't terminate on a folder block).
+      const useDirectRouting =
+        isTracedEdge || (simplifyHighlightedRoutes && isConnected && selectedNodeId !== null)
+      if (useDirectRouting) {
+        const sourceRect = directRouteContext.rectById.get(edge.source)
+        const targetRect = directRouteContext.rectById.get(edge.target)
+        if (sourceRect && targetRect) {
+          const sourcePoint = {
+            x: sourceRect.x + sourceRect.width,
+            y: sourceRect.y + sourceRect.height / 2,
+          }
+          const targetPoint = { x: targetRect.x, y: targetRect.y + targetRect.height / 2 }
+          const exclude = new Set<string>([
+            ...directRouteContext.ancestorIds(edge.source),
+            ...directRouteContext.ancestorIds(edge.target),
+          ])
+          const obstacles = directRouteContext.baseObstacles
+            .filter((entry) => !exclude.has(entry.id))
+            .map((entry) => entry.rect)
+          const points = routeDirectOrthogonal(sourcePoint, targetPoint, obstacles)
+          preparedEdges.push({
+            ...baseEdge,
+            type: 'bus',
+            data: {
+              ...(baseEdge.data ?? {}),
+              logicalEdgeId: edge.id,
+              logicalEdgeIds: [edge.id],
+              segmentIds: [],
+              points,
+              busLane: 0,
+              busCount: 1,
+              isPairPrimary: true,
+              pairKey: `direct:${edge.id}`,
+              pairCount: 1,
+              highlightedSegmentIds: [],
+            },
+          })
+          continue
+        }
+        // Rect lookup failed (shouldn't happen) — fall back to bus or base edge below.
+      }
+
+      const bus = busRouteIndex.routesByEdgeId.get(edge.id) ?? null
       if (!bus) {
         preparedEdges.push(baseEdge)
         continue
       }
 
-      if (compactTrunkMode && (bus.pairMeta?.count ?? 1) > 1 && !bus.isPairPrimary) {
-        continue
-      }
-
-      const segmentIds: string[] = []
-      for (let index = 0; index < bus.points.length - 1; index += 1) {
-        const from = bus.points[index]
-        const to = bus.points[index + 1]
-        const segmentId = segmentIdFromPoints(bus.sourceBlockId, bus.targetBlockId, bus.pairKey, from, to)
-        segmentIds.push(segmentId)
-        const existing = segmentLogicalIds.get(segmentId)
-        const logicalEdgeIds = bus.logicalEdgeIds
-        if (existing) {
-          for (const logicalEdgeId of logicalEdgeIds) {
-            existing.add(logicalEdgeId)
-          }
-        } else {
-          segmentLogicalIds.set(segmentId, new Set(logicalEdgeIds))
-        }
-      }
-
-      const aggregateCountLabel = bus.isCrossFolder && bus.isPairPrimary && (bus.pairMeta?.count ?? 1) > 1
-        ? String(bus.pairMeta?.count ?? '')
-        : undefined
-
       preparedEdges.push({
         ...baseEdge,
-        label: aggregateCountLabel ?? baseEdge.label,
         data: {
           ...(baseEdge.data ?? {}),
           logicalEdgeId: edge.id,
           logicalEdgeIds: bus.logicalEdgeIds,
-          segmentIds,
+          segmentIds: bus.segmentIds,
           points: bus.points,
           busLane: bus.lane,
           busCount: bus.laneCount,
           isPairPrimary: bus.isPairPrimary,
           pairKey: bus.pairKey,
-          pairCount: bus.pairMeta?.count ?? 1,
+          pairCount: bus.pairCount,
           highlightedSegmentIds: [],
         },
       })
@@ -2520,7 +2389,7 @@ function App() {
     return preparedEdges.map((edge) => {
       const segmentIds = Array.isArray(edge.data?.segmentIds) ? (edge.data.segmentIds as string[]) : []
       const highlightedSegmentIds = segmentIds.filter((segmentId) => {
-        const logicalIds = segmentLogicalIds.get(segmentId)
+        const logicalIds = busRouteIndex.segmentLogicalIds.get(segmentId)
         if (!logicalIds) {
           return false
         }
@@ -2541,15 +2410,13 @@ function App() {
     })
   }, [
     visibleEdges,
-    visibleNodes,
-    fileNodeToBlockId,
-    flowGraph,
-    hiddenNodeIds,
+    busRouteIndex,
+    directRouteContext,
     routingStyle,
-    busDisplayMode,
     selectedNodeId,
     directionFilter,
     edgeColorPriority,
+    simplifyHighlightedRoutes,
     architectureViolationEdgeKeySet,
     architectureViolationBlockPairCount,
     highlightArchitectureViolations,
@@ -2558,6 +2425,11 @@ function App() {
     hasBaselineGraphSnapshot,
     newFileEdgeKeySet,
     newBlockPairSet,
+    branchDiffView,
+    gitBranchCompareReport,
+    highlightOnlyChangedBranchEdges,
+    branchDiffBucketByFileNodeId,
+    branchDiffBucketsByBlockId,
   ])
 
 
@@ -2622,7 +2494,7 @@ function App() {
   useEffect(() => {
     setSelectedNodeId(null)
     setDirectionFilter('all')
-  }, [routingStyle, busDisplayMode, folderPacking])
+  }, [routingStyle, folderPacking])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -2764,16 +2636,26 @@ function App() {
     for (const edge of dependencyGraph.edges) {
       if (edge.fromPath === selectedFilePath) set.add(edge.toPath)
     }
+    if (showExternalImports) {
+      for (const edge of dependencyGraph.externalEdges) {
+        if (edge.fromPath === selectedFilePath) set.add(edge.toPath)
+      }
+    }
     return Array.from(set).sort()
-  }, [selectedFilePath, dependencyGraph])
+  }, [selectedFilePath, dependencyGraph, showExternalImports])
   const selectedImportedByFiles = useMemo(() => {
     if (!selectedFilePath || !dependencyGraph) return [] as string[]
     const set = new Set<string>()
     for (const edge of dependencyGraph.edges) {
       if (edge.toPath === selectedFilePath) set.add(edge.fromPath)
     }
+    if (showExternalImports) {
+      for (const edge of dependencyGraph.externalEdges) {
+        if (edge.toPath === selectedFilePath) set.add(edge.fromPath)
+      }
+    }
     return Array.from(set).sort()
-  }, [selectedFilePath, dependencyGraph])
+  }, [selectedFilePath, dependencyGraph, showExternalImports])
 
   function toggleSelectedBlockCollapse() {
     if (!selectedBlockId || graphMode !== 'file-level') {
@@ -4226,6 +4108,30 @@ function App() {
               <label className="toggle-row">
                 <input
                   type="checkbox"
+                  checked={showExternalImports}
+                  onChange={(event) => setShowExternalImports(event.target.checked)}
+                />
+                Show external imports
+              </label>
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={simplifyHighlightedRoutes}
+                  onChange={(event) => setSimplifyHighlightedRoutes(event.target.checked)}
+                />
+                Simplify highlighted routes
+              </label>
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={traceIntoCollapsedFolders}
+                  onChange={(event) => setTraceIntoCollapsedFolders(event.target.checked)}
+                />
+                Trace into collapsed folders
+              </label>
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
                   checked={highlightCycles}
                   onChange={(event) => setHighlightCycles(event.target.checked)}
                 />
@@ -4332,17 +4238,6 @@ function App() {
                 >
                   <option value="classic">classic</option>
                   <option value="bus">bus</option>
-                </select>
-              </label>
-              <label className="toggle-row">
-                Bus view
-                <select
-                  value={busDisplayMode}
-                  onChange={(event) => setBusDisplayMode(event.target.value as BusDisplayMode)}
-                  disabled={routingStyle !== 'bus'}
-                >
-                  <option value="detailed">detailed</option>
-                  <option value="trunk-only">trunk-only</option>
                 </select>
               </label>
               <label className="toggle-row">
@@ -4520,7 +4415,7 @@ function App() {
                     {isCanvasFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
                   </button>
                   <ReactFlow
-                    key={`rf-${graphMode}-${routingStyle}-${busDisplayMode}-${folderPacking}-${
+                    key={`rf-${graphMode}-${routingStyle}-${folderPacking}-${
                       routingStyle === 'classic'
                         ? `${selectedNodeId ?? 'none'}-${directionFilter}-${edgeKindFilter}-${edgeColorPriority}`
                         : `stable-${edgeKindFilter}-${edgeColorPriority}`
@@ -4531,7 +4426,7 @@ function App() {
                     }-${
                       architectureViolations.length
                     }`}
-                    nodes={visibleNodes}
+                    nodes={renderedNodes}
                     edges={displayEdges}
                     nodeTypes={nodeTypes}
                     edgeTypes={edgeTypes}

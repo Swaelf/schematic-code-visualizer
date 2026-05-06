@@ -14,6 +14,8 @@ function toNumber(value: unknown, fallback: number) {
   return typeof value === 'number' ? value : fallback
 }
 
+const EXTERNAL_BLOCK_ID = 'block:__external__'
+
 function applyCompactPackLayout(nodes: Node[]) {
   const blockNodes = nodes.filter(
     (node) => (node.type === 'folderBlock' || node.type === 'group') && !node.parentId,
@@ -22,9 +24,14 @@ function applyCompactPackLayout(nodes: Node[]) {
     return nodes
   }
 
+  const externalBlock = blockNodes.find((node) => node.id === EXTERNAL_BLOCK_ID) ?? null
+  const otherBlocks = externalBlock ? blockNodes.filter((node) => node !== externalBlock) : blockNodes
+  const externalWidth = externalBlock ? toNumber(externalBlock.style?.width, 240) : 0
+
   const gap = 30
   const outerPadding = 24
-  const sorted = [...blockNodes].sort((left, right) => {
+  const startX = outerPadding + (externalBlock ? externalWidth + gap : 0)
+  const sorted = [...otherBlocks].sort((left, right) => {
     const leftHeight = toNumber(left.style?.height, 220)
     const rightHeight = toNumber(right.style?.height, 220)
     if (rightHeight !== leftHeight) {
@@ -39,19 +46,22 @@ function applyCompactPackLayout(nodes: Node[]) {
     return sum + (width + gap) * (height + gap)
   }, 0)
   const widestNode = sorted.reduce((max, node) => Math.max(max, toNumber(node.style?.width, 400)), 0)
-  const targetRowWidth = Math.max(widestNode + outerPadding * 2, Math.sqrt(totalArea) * 1.1)
+  const targetRowWidth = Math.max(startX + widestNode + outerPadding, startX + Math.sqrt(totalArea) * 1.1)
 
   const positions = new Map<string, XYPosition>()
-  let x = outerPadding
+  if (externalBlock) {
+    positions.set(externalBlock.id, { x: outerPadding, y: outerPadding })
+  }
+  let x = startX
   let y = outerPadding
   let rowHeight = 0
 
   for (const node of sorted) {
     const width = toNumber(node.style?.width, 400)
     const height = toNumber(node.style?.height, 220)
-    const wouldOverflow = x > outerPadding && x + width > targetRowWidth
+    const wouldOverflow = x > startX && x + width > targetRowWidth
     if (wouldOverflow) {
-      x = outerPadding
+      x = startX
       y += rowHeight + gap
       rowHeight = 0
     }

@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "smoke": "tsx scripts/smoke-test.ts",
+    "smoke-bus": "tsx scripts/bus-router-smoke.ts",
     "git-churn": "tsx scripts/git-churn-report.ts",
     "git-compare": "tsx scripts/git-branch-compare-report.ts",
     "git-live": "tsx scripts/git-live-server.ts"

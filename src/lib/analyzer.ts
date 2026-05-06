@@ -240,10 +240,24 @@ function resolveImport(
   return aliasPath ? { path: aliasPath, viaAlias: true } : null
 }
 
+function getPackageName(specifier: string): string {
+  if (specifier.startsWith('@')) {
+    const parts = specifier.split('/')
+    return parts.slice(0, 2).join('/')
+  }
+  return specifier.split('/')[0]
+}
+
+function externalPath(packageName: string): string {
+  return `external:${packageName}`
+}
+
 export function analyzeProjectDependencies(files: SourceFileRecord[], options: AnalyzeOptions): DependencyGraph {
   const projectFileSet = new Set(files.map((file) => file.path))
   const analyses: FileAnalysis[] = []
   const edges: DependencyEdge[] = []
+  const externalEdges: DependencyEdge[] = []
+  const externalPackageSet = new Set<string>()
   let unresolvedImportCount = 0
   let unresolvedExternalCount = 0
   let unresolvedInternalCount = 0
@@ -262,6 +276,14 @@ export function analyzeProjectDependencies(files: SourceFileRecord[], options: A
           unresolvedInternalCount += 1
         } else {
           unresolvedExternalCount += 1
+          const packageName = getPackageName(importRef.specifier)
+          externalPackageSet.add(packageName)
+          externalEdges.push({
+            fromPath: file.path,
+            toPath: externalPath(packageName),
+            specifier: importRef.specifier,
+            kind: importRef.kind,
+          })
         }
         continue
       }
@@ -290,6 +312,8 @@ export function analyzeProjectDependencies(files: SourceFileRecord[], options: A
   return {
     files: analyses,
     edges,
+    externalEdges,
+    externalPackages: [...externalPackageSet].sort(),
     unresolvedImportCount,
     unresolvedExternalCount,
     unresolvedInternalCount,
